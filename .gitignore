@@ -1,0 +1,7 @@
+venv/
+PyPSA Resources/
+export/
+experiments/
+
+*.nc
+*.csv
