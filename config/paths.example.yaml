@@ -1,0 +1,7 @@
+# Example local paths configuration
+# Each user must create their own paths.local.yaml
+# (This file should NOT contain personal absolute paths)
+
+data_raw: "PATH_TO_DRIVE_DATA_RAW"
+data_processed: "LOCAL_PROCESSED_DATA_FOLDER"
+results: "LOCAL_RESULTS_FOLDER"

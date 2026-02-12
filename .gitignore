@@ -2,6 +2,7 @@ venv/
 PyPSA Resources/
 export/
 experiments/
+config/paths.local.yaml
 
 *.nc
 *.csv
