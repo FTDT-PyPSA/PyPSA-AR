@@ -1,8 +1,9 @@
 venv/
 PyPSA Resources/
-export/
+outputs/
+old/
 experiments/
 config/paths.local.yaml
-
+__pycache__/
+*.pyc
 *.nc
-*.csv

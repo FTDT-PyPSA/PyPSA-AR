@@ -1,39 +1,80 @@
-# pypsa-ar-base
-Argentina  network model in PyPSA
 # PyPSA-AR-BASE
 
-Argentina electricity network model using PyPSA.
+Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
 
-## Project Overview
+**Estado actual:** Construcción red 500 kV — pipeline 01→05 completo, script 06 pendiente.  
+**Fecha límite:** 30/04/2026
 
-This project aims to build a reproducible base model of Argentina's  transmission network using PyPSA.
+---
 
-The objective is to:
+## Objetivo
 
-- Develop a clean ETL pipeline (Extract–Transform–Load)
-- Structure network data (buses, lines, transformers, loads, generators)
-- Reproduce a 2024 baseline network model
-- Prepare the system for future scenario integration (VRE, storage, policy cases)
+Construir un modelo calibrado del SADI (Sistema Argentino de Interconexión) que permita:
+- Replicar el despacho histórico 2024 contra datos CAMMESA
+- Analizar restricciones de transmisión
+- Servir de base para escenarios de expansión y política energética
 
-## Current Status
+Estrategia: construir nivel por nivel (500 kV → 220/330 kV → 132 kV), validando cada uno antes de avanzar.
 
-Version: v0.1  
-Phase: Base model architecture and data structuring
+---
 
-## Project Structure (planned)
 
-- `data/` → input datasets (not all stored in repo)
-- `scripts/` → ETL and build scripts
-- `config/` → model configuration files
-- `docs/` → technical documentation
-- `notebooks/` → exploration and testing
+## Entorno de trabajo
 
-## Environment
+El proyecto usa **WSL (Ubuntu)** para correr los scripts, con el entorno conda `pypsa-earth-lock`.
+**No usar Python de Windows ni un venv paralelo.**
 
-Python 3.11  
-PyPSA 1.0.7
+### Setup
 
-## Notes
+1. Tener WSL instalado con Ubuntu
+2. Tener miniforge/conda en WSL
+3. Activar el entorno:
 
-Large datasets are stored externally (Drive / shared storage).  
-This repository tracks structure, scripts, and reproducible workflows.
+```bash
+conda activate pypsa-earth-lock
+```
+
+4. Verificar el Python correcto:
+
+```bash
+which python
+# debe mostrar: /home/<user>/miniforge3/envs/pypsa-earth-lock/bin/python
+```
+
+### Correr los scripts
+
+Todos los scripts se ejecutan desde WSL usando rutas `/mnt/c/...`:
+
+```bash
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/01_parse_raw_buses.py
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/02_parse_raw_lines.py
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/03_match_geosadi_coords.py
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/04_match_geosadi_geometry.py
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05_validate_topology.py
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05b_export_qgis.py  # opcional, requiere geopandas
+```
+
+### Editor recomendado
+
+Cursor (Windows) — editar los scripts en Windows, correrlos en WSL. Funciona sin problema.
+
+---
+
+## Equipo
+
+| Nombre | Rol |
+|--------|-----|
+| Gustavo Barbaran | Líder del proyecto |
+| Gus | Datos y modelado de red |
+| Juan | Programación y pipeline |
+
+---
+
+## Documentación
+
+Ver carpeta `docs/` para:
+- `roadmap.md` — estado y fases del proyecto
+- `architecture.md` — diseño del modelo
+- `data_sources.md` — fuentes de datos y estado
+- `aprendizaje_pypsaearth_ar.md` — por qué se abandonó PyPSA-Earth
+- `auditoria_macro_geosadi_vs_pypsa.md` — comparación cuantitativa GeoSADI vs OSM

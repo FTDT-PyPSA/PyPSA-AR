@@ -1,184 +1,107 @@
-# PyPSA-AR Data Sources (Aligned with 10/02/2026 Meeting)
+# PyPSA-AR Data Sources
 
-This document defines the datasets required for PyPSA-AR-BASE v0.1,
-aligned with the agreed modeling scope:
-
-500 kV backbone + selected 220/132 kV nodes.
+Este documento describe las fuentes de datos del proyecto y su estado actual.
 
 ---
 
-## 1. Transmission Network
+## 1. Red de transporte — 500 kV
 
-### Scope
+### Fuente principal: PSS/E ver2526pid.raw (CAMMESA)
 
-- 500 kV national backbone (primary layer)
-- Selected 220 kV and 132 kV nodes where:
-  - Major generation assets connect
-  - Structural bottlenecks are relevant
-  - Data is sufficiently reliable
+Caso: *Pico Hábil Diurno del Verano 25/26 — Demanda SADI 30.960 MW*
 
-### Data Required
+Contiene:
+- BUS DATA: buses con nivel de tensión, tipo (PQ/PV/slack), área
+- BRANCH DATA: líneas y compensadores serie con r, x, b en pu (Sbase=100 MVA) y ratings MVA
+- TRANSFORMER DATA: transformadores inter-nivel
 
-- Buses (coordinates, voltage level)
-- Lines (bus0, bus1, voltage, length)
-- Thermal limits (s_nom)
-- Electrical parameters (r, x)
-- Interconnections with neighboring countries
+Procesado por: `01_parse_raw_buses.py`, `02_parse_raw_lines.py`
 
-### Sources
 
-- CAMMESA (technical reports, posoperativos)
-- ATEERA transport reference guides
-- Secretaría de Energía (where available)
-- PyPSA-Earth South America run (baseline structure)
+### Fuente geográfica: GeoSADI (CAMMESA)
 
-Status:
-Public transport data collected.
-Some provincial trunk data not publicly available.
-Further validation required.
+URL: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
 
----
+Layers utilizados:
+- `estaciones_transformadoras.geojson` — coordenadas y nombre de estaciones por nivel de tensión
+- `lineas_alta_tension.geojson` — geometría de líneas con nombre y tensión
 
-## 2. Generation Assets
+Procesado por: `03_match_geosadi_coords.py`, `04_match_geosadi_geometry.py`
 
-### Data Required
 
-- Installed capacity (MW)
-- Technology type
-- Location (bus assignment)
-- Availability factors
-- Marginal cost inputs
-- Fuel type
-- Emission factors
+### Diccionario de matching manual
 
-### Sources
+`data/network_500kv/buses_PSSE_vs_geosadi.xlsx` — mapeo manual bus PSS/E → nombre GeoSADI.
+Versionado en Git.
 
-- CAMMESA reports
-- Secretaría de Energía
-- Official plant documentation
-- PyPSA-Earth baseline (for structural comparison)
+`data/network_500kv/manual_line_mappings.csv` — mapeo manual line_key → geosadi_line_id.
+Versionado en Git.
 
-Status:
-Identification phase ongoing.
+### Estado
+
+✅ 96 buses procesados (94 OK, 2 CONSULTAR)
+✅ 122 líneas procesadas (sin_match = 0)
+✅ Topología validada
+✅ Check visual en QGIS 
 
 ---
 
-## 3. Demand Profiles
+## 2. Generación
 
-### Data Required
+### Fuente: GeoSADI — centrales_electricas
 
-- Hourly national demand (2023–2024)
-- Regional disaggregation (if available)
-- Seasonal patterns
-- Peak values
+436 centrales / 48.099 MW instalados.
 
-### Sources
+Incluye: térmica, hidro, nuclear, eólica, solar.
 
-- CAMMESA public demand reports
-- Monthly demand summaries
+Estado: 🔲 pendiente .
 
-Status:
-Historical data collected.
-Cleaning and structuring pending.
+### Fuente complementaria: CAMMESA posoperativos
+
+Para calibración: despacho horario real 2024 por tecnología.
+
+Estado: 🔲 pendiente.
 
 ---
 
-## 4. Renewable Resource Data (VRE)
+## 3. Demanda
 
-### Wind
+### Fuente: CAMMESA
 
-- ERA5 wind speeds (10m / 100m)
-- Capacity factor estimation (atlite)
+Perfiles horarios de demanda 2024.
+Desagregación regional por nodo.
 
-### Solar
+Estado: 🔲 pendiente —
+---
 
-- ERA5 irradiance
+## 4. Renovables (VRE)
+
+### Viento y solar
+
+- ERA5 (velocidades de viento, irradiancia)
 - Atlas Solar Argentina
-- Capacity factor estimation
+- Procesamiento con atlite para factores de capacidad horarios
 
-Status:
-Not yet processed.
-
----
-
-## 5. Hydro Data
-
-### Data Required
-
-- Installed hydro capacity
-- Type (run-of-river / storage)
-- Historical generation (if available)
-
-Sources:
-
-- CAMMESA
-- Official hydro documentation
-
-Status:
-Preliminary identification.
+Estado: 🔲 no iniciado.
 
 ---
 
-## 6. Fuel Prices & Emissions
+## 5. Precios de combustibles y emisiones
 
-### Data Required
+### Fuentes
 
-- Natural gas price assumptions
-- Liquid fuel prices
-- Nuclear cost assumptions
-- Emission factors (tCO2/MWh)
+- ENARGAS (gas natural)
+- CAMMESA (precios de referencia)
+- IRENA / NREL ATB (referencias internacionales)
+- Factores de emisión por tecnología (tCO2/MWh)
 
-Sources:
-
-- ENARGAS
-- CAMMESA
-- IRENA
-- NREL ATB
-- International references
-
-Status:
-To be structured.
+Estado: 🔲 a estructurar en fase de calibración.
 
 ---
 
-## 7. PyPSA-Earth Baseline (South America Run)
+## Principios de gestión de datos
 
-The project has access to CSV files generated from a PyPSA-Earth
-South America run.
-
-These files include:
-
-- Buses
-- Lines
-- Generators
-- Demand structure
-- Transmission parameters
-
-Purpose:
-
-- Structural template
-- Understanding required PyPSA input format
-- Initial topology reference
-
-Important:
-
-The South America dataset is NOT considered validated Argentine data.
-
-It will be:
-- Filtered to Argentina
-- Cross-validated with national sources
-- Calibrated against CAMMESA dispatch
-
----
-
-## Data Governance Principles
-
-- All datasets must have source reference.
-- Date of extraction must be recorded.
-- Large datasets are stored outside Git.
-- Only scripts, metadata, and documentation are version-controlled.
-- All transformations must be reproducible.
-
----
-
-This document will evolve as datasets are consolidated and validated.
+- Toda fuente debe tener referencia y fecha de extracción.
+- Archivos crudos pesados (.raw, .geojson, .nc) se almacenan en googledrive, fuera de Git.
+- Solo se versionan: scripts, CSVs procesados, diccionarios de matching y documentación.
+- Todas las transformaciones son reproducibles desde los archivos fuente.

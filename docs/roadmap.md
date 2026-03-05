@@ -1,109 +1,97 @@
-# PyPSA-AR Roadmap (Aligned with 10/02/2026 Meeting)
+# PyPSA-AR Roadmap
 
-This roadmap reflects the agreed modeling scope:
-500 kV backbone + selected 220/132 kV nodes.
+Objetivo: modelo calibrado y reproducible de la red eléctrica argentina usando PyPSA.
 
-The objective is to reach a calibrated PyPSA-AR-BASE v0.1 model.
-
----
-
-## Phase 0 – Repository & Structure (Completed)
-
-- GitHub repository initialized
-- Documentation structure created
-- Data dictionary defined
-- Scope clarified
+Estrategia de construcción: arrancar con la red 500 kV completa y cerrarla antes de
+incorporar niveles de tensión inferiores. Cada nivel se valida antes de avanzar al siguiente.
 
 ---
 
-## Phase 1 – Review Existing PyPSA Data (Immediate Task)
+## Fase 0 — Repositorio y estructura ✅ COMPLETADA
 
-Objective:
-Identify what Argentina-specific data already exists in the PyPSA-Earth South America run.
-
-Tasks:
-- Extract Argentina buses
-- Review transmission lines (500 kV focus)
-- Review generation assets
-- Review topology consistency
-- Assess parameter completeness (x, r, s_nom, etc.)
-
-Deliverable:
-Technical memo:
-“What does PyPSA already know about Argentina?”
+- Repositorio GitHub inicializado
+- Estructura de carpetas definida
+- Documentación base creada
+- Entorno reproducible configurado (pypsa-earth-lock en WSL)
 
 ---
 
-## Phase 2 – Data Consolidation
+## Fase 1 — Auditoría PyPSA-Earth para Argentina ✅ COMPLETADA
 
-Objective:
-Consolidate national datasets.
+Objetivo: entender qué modelaba PyPSA-Earth para AR y decidir si reutilizar o reemplazar.
 
-Tasks:
-- Validate CAMMESA demand series
-- Consolidate transport data (ATEERA)
-- Map generation assets
-- Identify missing transmission segments
-- Detect data gaps
+Resultado: se decidió reemplazar toda la data de OSM por GeoSADI + PSS/E.
+Razones documentadas en `Aprendizaje_pypsaearth_ar.txt`.
 
-Deliverable:
-Validated data inventory ready for ETL.
+Hallazgos clave:
+- PyPSA-Earth tiene 125 transformadores vs 1.132 reales (11% cobertura)
+- Líneas 500 kV con tipo de conductor europeo (380 kV)
+- Sin impedancias activas (r=0, x=0)
 
 ---
 
-## Phase 3 – Base Model Construction
+## Fase 2 — Construcción red 500 kV ✅ EN CURSO
 
-Objective:
-Build first runnable PyPSA-AR network.
+Fuentes: GeoSADI (geometría) + PSS/E ver2526pid.raw (topología e impedancias)
 
-Tasks:
-- Import 500 kV backbone
-- Add selected 220/132 kV nodes
-- Map generators to nodes
-- Assign demand
-- Integrate renewable profiles
+Scripts desarrollados:
 
-Deliverable:
-First operational PyPSA-AR model.
+| Script | Descripción | Estado |
+|--------|-------------|--------|
+| 01_parse_raw_buses.py | Extrae buses 500 kV del PSS/E | ✅ |
+| 02_parse_raw_lines.py | Extrae líneas 500 kV del PSS/E | ✅ |
+| 03_match_geosadi_coords.py | Asigna coordenadas GeoSADI a buses | ✅ |
+| 04_match_geosadi_geometry.py | Asigna geometría WKT a líneas | ✅ |
+| 05_validate_topology.py | Valida topología de la red | ✅ |
+| 05b_export_qgis.py | Exporta a GeoPackage para QGIS | ✅ |
+| 06_build_pypsa_network.py | Construye objeto PyPSA Network | 🔲 |
 
----
+Estado actual de la red 500 kV:
+- 96 buses (94 OK, 2 CONSULTAR: T PEPE y R9B5RS)
+- 122 líneas (114 en servicio, 8 fuera de servicio en este snapshot)
+- 15 compensadores serie
+- sin_match = 0 en geometría
+- Red principal: 92 buses en una componente conexa
 
-## Phase 4 – Calibration (2024 Base Year)
-
-Objective:
-Replicate historical dispatch.
-
-Tasks:
-- Run full 8760h simulation
-- Compare generation by technology vs CAMMESA
-- Adjust marginal costs
-- Validate transmission limits
-- Ensure no energy-not-served
-
-Success Criteria:
-- Dispatch error ≤ ±5%
-- Stable solver convergence
-
-Deliverable:
-PyPSA-AR-BASE v0.1 calibrated model.
+Pendientes antes de cerrar la fase:
+- Check visual en QGIS
+- Script 06: construir objeto PyPSA con impedancias reales
 
 ---
 
-## Phase 5 – Scenario Preparation (v0.2)
+## Fase 3 — Generación y demanda 500 kV 🔲 PENDIENTE
 
-Objective:
-Prepare architecture for policy and expansion scenarios.
+Objetivo: incorporar generación y demanda únicamente para la red 500 kV y que cierre.
 
-Tasks:
-- Scenario configuration structure
-- Emission constraints
-- Renewable targets
-- Fuel price sensitivities
-- Expansion enablement
 
-Deliverable:
-Scenario-ready architecture.
+Tareas:
+- Mapear centrales eléctricas a buses 500 kV
+- Asignar perfiles de demanda por nodo
+- Correr simulación y verificar que la red converge
 
 ---
 
-This roadmap will be updated as modeling progresses.
+## Fase 4 — Incorporar niveles 220, 330, 132 kV 🔲 PENDIENTE
+
+Mismo pipeline que 500 kV, nivel por nivel.
+Scripts 01-05 son reutilizables con distintos filtros de tensión.
+Incorporar transformadores inter-nivel.
+
+---
+
+## Fase 5 — Generación y demanda completas 🔲 PENDIENTE
+
+- 436 centrales del GeoSADI (hidro, eólica, solar incluidas)
+- Perfiles horarios 8760h año base 2024
+- Datos CAMMESA
+
+---
+
+## Fase 6 — Calibración año base 2024 🔲 PENDIENTE
+
+- Simulación completa 8760h
+- Comparar despacho simulado vs CAMMESA por tecnología
+- Ajustar costos variables hasta match ±5%
+- Validar límites de transmisión
+
+Fecha límite del proyecto: 30/04/2026
