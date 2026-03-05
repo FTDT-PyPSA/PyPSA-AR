@@ -27,7 +27,7 @@ Esta combinación no es accidental:
 
 - PyPSA y sus dependencias (especialmente solvers lineales) funcionan de forma más estable en Linux
 - El entorno `pypsa-earth-lock` fija las versiones de todas las librerías para garantizar reproducibilidad entre máquinas del equipo
-- Cursor o VSCODE en Windows permite editar cómodamente  y correr en WSL sin fricción
+- Cursor o VSCODE en Windows  correr en WSL sin fricción
 
 **No usar Python de Windows ni un venv paralelo** — los scripts asumen rutas `/mnt/c/...` y el entorno conda de WSL.
 
@@ -41,17 +41,23 @@ wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge
 bash Miniforge3-Linux-x86_64.sh
 ```
 
-3. Crear el entorno desde el archivo del repo:
+3. Clonar el repo (desde WSL o Windows) y ubicarse en la raíz:
 ```bash
-conda env create -f /mnt/c/Work/pypsa-ar-base/environment.yml
+git clone https://github.com/<tu-org>/pypsa-ar-base.git
+cd pypsa-ar-base
 ```
 
-4. Activar el entorno:
+4. Crear el entorno desde el archivo del repo:
+```bash
+conda env create -f environment.yml
+```
+
+5. Activar el entorno:
 ```bash
 conda activate pypsa-earth-lock
 ```
 
-5. Verificar el Python correcto:
+6. Verificar el Python correcto:
 ```bash
 which python
 # debe mostrar: /home/<user>/miniforge3/envs/pypsa-earth-lock/bin/python
@@ -59,14 +65,20 @@ which python
 
 ### Correr el pipeline 500 kV
 
+Los scripts se ejecutan desde WSL. Reemplazá `<ruta-al-repo>` con la ruta local al repo
+(ej: `/mnt/c/Work/pypsa-ar-base`):
+
 ```bash
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/01_parse_raw_buses.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/02_parse_raw_lines.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/03_match_geosadi_coords.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/04_match_geosadi_geometry.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05_validate_topology.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05b_export_qgis.py  
+python <ruta-al-repo>/scripts/network_500kv/01_parse_raw_buses.py
+python <ruta-al-repo>/scripts/network_500kv/02_parse_raw_lines.py
+python <ruta-al-repo>/scripts/network_500kv/03_match_geosadi_coords.py
+python <ruta-al-repo>/scripts/network_500kv/04_match_geosadi_geometry.py
+python <ruta-al-repo>/scripts/network_500kv/05_validate_topology.py
+python <ruta-al-repo>/scripts/network_500kv/05b_export_qgis.py
 ```
+
+> **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI) están hardcodeadas en la sección
+> `CONFIGURACION` al inicio de cada script. Si tu estructura de carpetas es distinta, actualizalas antes de correr.
 
 
 ---
@@ -76,7 +88,7 @@ python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05b_export_qgis.py
 | Nombre | Rol |
 |--------|-----|
 | Gustavo Barbaran | Líder del proyecto |
-| Gus | Datos y modelado de red |
+| Gustavo Ramirez | Datos y modelado de red |
 | Juan | Programación y pipeline |
 
 ---
