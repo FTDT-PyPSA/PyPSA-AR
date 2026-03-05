@@ -7,3 +7,12 @@ config/paths.local.yaml
 __pycache__/
 *.pyc
 *.nc
+
+# Excel temporary files
+~$*.xlsx
+
+# QGIS temporary files
+*.qgz~
+*.gpkg-wal
+*.gpkg-shm
+
