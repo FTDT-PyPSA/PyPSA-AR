@@ -1,0 +1,9 @@
+venv/
+PyPSA Resources/
+outputs/
+old/
+experiments/
+config/paths.local.yaml
+__pycache__/
+*.pyc
+*.nc

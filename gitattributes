@@ -1,0 +1,23 @@
+# Normalizar line endings a LF en el repo
+# Git convierte automáticamente al hacer checkout en cada OS
+
+* text=auto eol=lf
+
+# Forzar LF explícitamente en estos tipos
+*.py    text eol=lf
+*.md    text eol=lf
+*.csv   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+*.sh    text eol=lf
+
+# Binarios — no tocar
+*.nc    binary
+*.raw   binary
+*.gpkg  binary
+*.xlsx  binary
+*.docx  binary
+*.png   binary
+*.jpg   binary
