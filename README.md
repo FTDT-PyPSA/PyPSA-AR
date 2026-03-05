@@ -18,32 +18,46 @@ Estrategia: construir nivel por nivel (500 kV → 220/330 kV → 132 kV), valida
 
 ---
 
-
 ## Entorno de trabajo
 
-El proyecto usa **WSL (Ubuntu)** para correr los scripts, con el entorno conda `pypsa-earth-lock`.
-**No usar Python de Windows ni un venv paralelo.**
+### Por qué WSL + Windows
 
-### Setup
+El proyecto usa **WSL (Ubuntu)** para ejecutar los scripts y **Windows (Cursor o VSCODE)** para editarlos.
+Esta combinación no es accidental:
+
+- PyPSA y sus dependencias (especialmente solvers lineales) funcionan de forma más estable en Linux
+- El entorno `pypsa-earth-lock` fija las versiones de todas las librerías para garantizar reproducibilidad entre máquinas del equipo
+- Cursor o VSCODE en Windows permite editar cómodamente  y correr en WSL sin fricción
+
+**No usar Python de Windows ni un venv paralelo** — los scripts asumen rutas `/mnt/c/...` y el entorno conda de WSL.
+
+### Setup del entorno
 
 1. Tener WSL instalado con Ubuntu
-2. Tener miniforge/conda en WSL
-3. Activar el entorno:
+2. Tener miniforge instalado en WSL:
+```bash
+# Si no lo tenés:
+wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+bash Miniforge3-Linux-x86_64.sh
+```
 
+3. Crear el entorno desde el archivo del repo:
+```bash
+conda env create -f /mnt/c/Work/pypsa-ar-base/environment.yml
+```
+
+4. Activar el entorno:
 ```bash
 conda activate pypsa-earth-lock
 ```
 
-4. Verificar el Python correcto:
-
+5. Verificar el Python correcto:
 ```bash
 which python
 # debe mostrar: /home/<user>/miniforge3/envs/pypsa-earth-lock/bin/python
 ```
 
-### Correr los scripts
-
-Todos los scripts se ejecutan desde WSL usando rutas `/mnt/c/...`:
+### Correr el pipeline 500 kV
 
 ```bash
 python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/01_parse_raw_buses.py
@@ -51,12 +65,9 @@ python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/02_parse_raw_lines.py
 python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/03_match_geosadi_coords.py
 python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/04_match_geosadi_geometry.py
 python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05_validate_topology.py
-python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05b_export_qgis.py  # opcional, requiere geopandas
+python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05b_export_qgis.py  
 ```
 
-### Editor recomendado
-
-Cursor (Windows) — editar los scripts en Windows, correrlos en WSL. Funciona sin problema.
 
 ---
 
@@ -78,3 +89,4 @@ Ver carpeta `docs/` para:
 - `data_sources.md` — fuentes de datos y estado
 - `aprendizaje_pypsaearth_ar.md` — por qué se abandonó PyPSA-Earth
 - `auditoria_macro_geosadi_vs_pypsa.md` — comparación cuantitativa GeoSADI vs OSM
+- `auditoria_red_oficial_vs_pypsa.md` — proceso de auditoría y decisión de migrar a GeoSADI
