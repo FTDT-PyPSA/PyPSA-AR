@@ -89,7 +89,7 @@ python <ruta-al-repo>/scripts/network_500kv/05b_export_qgis.py
 |--------|-----|
 | Gustavo Barbaran | Líder del proyecto |
 | Gustavo Ramirez | Datos y modelado de red |
-| Juan | Programación y pipeline |
+| Juan Manuel Bregman | Programación y pipeline |
 
 ---
 
