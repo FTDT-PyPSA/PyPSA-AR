@@ -1,10 +1,10 @@
 """
 02_parse_raw_lines.py
-Extrae lineas 500 kV del .raw del SADI y exporta a CSV.
+Extrae lineas 500 kV del .raw del PSSE y exporta a CSV.
 
-Fuente  : C:/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw
-Depende : C:/Work/pypsa-ar-base/data/network_500kv/buses_500kv_raw.csv  (script 01)
-Output  : C:/Work/pypsa-ar-base/data/network_500kv/lines_500kv_raw.csv
+Fuente  : Official data/PSSE/ver2526pid.raw
+Depende : data/network_500kv/buses_500kv_raw.csv (output script 01)
+Output  : data/network_500kv/lines_500kv_raw.csv
 
 Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/02_parse_raw_lines.py
@@ -31,10 +31,15 @@ Filtro de internacionales:
     (EXCLUDE_INTERNATIONAL=True), las ramas con esos buses quedan fuera automaticamente.
 
 Criterios de clasificacion:
-    element_type=series_compensator : LEN=0 y X<0 (compensador serie capacitivo)
+    element_type=series_compensator : X<0 (compensador serie capacitivo)
     element_type=line               : resto
     rating_defined=False            : RATEA=0 en el .raw (sin limite termico definido)
                                       ratea_mva se setea a NaN en esos casos
+
+Campo in_service:
+    FORCE_ALL_IN_SERVICE=True  -> todas las ramas quedan in_service=True
+                                  representa la red completa en condiciones normales
+    FORCE_ALL_IN_SERVICE=False -> in_service refleja el ST del raw (snapshot puntual)
 """
 
 import os, sys
@@ -51,9 +56,13 @@ BUSES_FILE  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_500kv_raw.csv"
 OUTPUT_DIR  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "lines_500kv_raw.csv")
 
-# True  -> incluye lineas ST=0 marcadas con in_service=False
-# False -> solo lineas en servicio (default)
+# True  -> incluye lineas ST=0 en el CSV
+# False -> solo lineas en servicio
 INCLUDE_OUT_OF_SERVICE = True
+
+# True  -> fuerza in_service=True en todas las ramas (red completa, condiciones normales)
+# False -> in_service refleja el ST del raw tal cual (snapshot puntual del PSS/E)
+FORCE_ALL_IN_SERVICE = True
 
 
 # =============================================================================
@@ -137,19 +146,26 @@ def main():
                     if b['bus_i'] in valid_ids and b['bus_j'] in valid_ids]
     print(f"Ramas 500 kV (ambos extremos)   : {len(branches_500)}")
 
-    for b in branches_500:
-        b['in_service'] = (b['st'] == 1)
-
-    in_svc  = sum(1 for b in branches_500 if b['in_service'])
-    out_svc = sum(1 for b in branches_500 if not b['in_service'])
+    in_svc  = sum(1 for b in branches_500 if b['st'] == 1)
+    out_svc = sum(1 for b in branches_500 if b['st'] == 0)
     print(f"  En servicio    (ST=1) : {in_svc}")
     print(f"  Fuera servicio (ST=0) : {out_svc}")
 
     if not INCLUDE_OUT_OF_SERVICE:
-        branches_500 = [b for b in branches_500 if b['in_service']]
+        branches_500 = [b for b in branches_500 if b['st'] == 1]
         print(f"  -> ST=0 excluidas (INCLUDE_OUT_OF_SERVICE=False). Quedan: {len(branches_500)}")
     else:
         print(f"  -> ST=0 incluidas (INCLUDE_OUT_OF_SERVICE=True)")
+
+    # Asignar in_service
+    if FORCE_ALL_IN_SERVICE:
+        for b in branches_500:
+            b['in_service'] = True
+        print(f"  -> FORCE_ALL_IN_SERVICE=True: todas las ramas marcadas in_service=True")
+    else:
+        for b in branches_500:
+            b['in_service'] = (b['st'] == 1)
+        print(f"  -> FORCE_ALL_IN_SERVICE=False: in_service refleja ST del raw")
 
     for b in branches_500:
         name_i = id_to_name.get(b['bus_i'], b['bus_i'])
@@ -157,7 +173,7 @@ def main():
         ckt_map = {'A': '1', 'B': '2', 'C': '3', 'D': '4', 'E': '5'}
         b['ckt'] = ckt_map.get(b['ckt'].upper(), b['ckt'])
         b['line_key']       = f"{name_i}-{name_j}-{b['ckt']}"
-        b['element_type']   = 'series_compensator' if (b['len_km'] == 0 and b['x_pu'] < 0) else 'line'
+        b['element_type']   = 'series_compensator' if (b['x_pu'] < 0) else 'line'
         b['rating_defined'] = (b['ratea_mva'] != 0)
         if not b['rating_defined']:
             b['ratea_mva'] = np.nan
@@ -195,7 +211,7 @@ def main():
     df[col_order].to_csv(OUTPUT_FILE, index=False)
 
     print(f"\nâ {OUTPUT_FILE}  ({len(df)} filas)")
-    print("Proximo: 03_match_geosadi_coords.py")
+    print("Proximo: 03_parse_raw_transformers.py")
 
 
 if __name__ == "__main__":

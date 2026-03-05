@@ -2,7 +2,7 @@
 
 Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
 
-**Estado actual:** Construcción red 500 kV — pipeline 01→05 completo, script 06 pendiente.  
+**Estado actual:** Construcción red 500 kV — pipeline 01→07b completo, script 08 pendiente.
 **Fecha límite:** 30/04/2026
 
 ---
@@ -22,12 +22,12 @@ Estrategia: construir nivel por nivel (500 kV → 220/330 kV → 132 kV), valida
 
 ### Por qué WSL + Windows
 
-El proyecto usa **WSL (Ubuntu)** para ejecutar los scripts y **Windows (Cursor o VSCODE)** para editarlos.
+El proyecto usa **WSL (Ubuntu)** para ejecutar los scripts y **Windows (Cursor o VSCode)** para editarlos.
 Esta combinación no es accidental:
 
 - PyPSA y sus dependencias (especialmente solvers lineales) funcionan de forma más estable en Linux
 - El entorno `pypsa-earth-lock` fija las versiones de todas las librerías para garantizar reproducibilidad entre máquinas del equipo
-- Cursor o VSCODE en Windows  correr en WSL sin fricción
+- Cursor y VSCode en Windows corren en WSL sin fricción
 
 **No usar Python de Windows ni un venv paralelo** — los scripts asumen rutas `/mnt/c/...` y el entorno conda de WSL.
 
@@ -36,12 +36,11 @@ Esta combinación no es accidental:
 1. Tener WSL instalado con Ubuntu
 2. Tener miniforge instalado en WSL:
 ```bash
-# Si no lo tenés:
 wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
 bash Miniforge3-Linux-x86_64.sh
 ```
 
-3. Clonar el repo (desde WSL o Windows) y ubicarse en la raíz:
+3. Clonar el repo y ubicarse en la raíz:
 ```bash
 git clone https://github.com/<tu-org>/pypsa-ar-base.git
 cd pypsa-ar-base
@@ -71,15 +70,16 @@ Los scripts se ejecutan desde WSL. Reemplazá `<ruta-al-repo>` con la ruta local
 ```bash
 python <ruta-al-repo>/scripts/network_500kv/01_parse_raw_buses.py
 python <ruta-al-repo>/scripts/network_500kv/02_parse_raw_lines.py
-python <ruta-al-repo>/scripts/network_500kv/03_match_geosadi_coords.py
-python <ruta-al-repo>/scripts/network_500kv/04_match_geosadi_geometry.py
-python <ruta-al-repo>/scripts/network_500kv/05_validate_topology.py
-python <ruta-al-repo>/scripts/network_500kv/05b_export_qgis.py
+python <ruta-al-repo>/scripts/network_500kv/03_parse_raw_transformers.py
+python <ruta-al-repo>/scripts/network_500kv/04_parse_raw_buses_sec.py
+python <ruta-al-repo>/scripts/network_500kv/05_match_geosadi_coords.py
+python <ruta-al-repo>/scripts/network_500kv/06_match_geosadi_geometry.py
+python <ruta-al-repo>/scripts/network_500kv/07_validate_topology.py
+python <ruta-al-repo>/scripts/network_500kv/07b_export_qgis.py
 ```
 
 > **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI) están hardcodeadas en la sección
 > `CONFIGURACION` al inicio de cada script. Si tu estructura de carpetas es distinta, actualizalas antes de correr.
-
 
 ---
 

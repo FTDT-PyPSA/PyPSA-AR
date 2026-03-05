@@ -1,10 +1,10 @@
 """
-04_match_geosadi_geometry.py
+06_match_geosadi_geometry.py
 Asigna geometria (WKT) a las lineas 500 kV del PSS/E matcheando contra
 el layer lineas_alta_tension del GeoSADI.
 
 Depende de:
-    buses_500kv_final.csv        (output script 03)
+    buses_final.csv        (output script 05)
     lines_500kv_raw.csv          (output script 02)
     manual_line_mappings.csv     (diccionario line_key -> geosadi_line_id)
     lineas_alta_tension.geojson  (GeoSADI)
@@ -14,7 +14,7 @@ Output:
     lines_500kv_final.csv
 
 Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/04_match_geosadi_geometry.py
+    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/06_match_geosadi_geometry.py
 
 Logica de matching:
 
@@ -58,7 +58,7 @@ from aliases_500kv import ALIASES
 DATA_DIR      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
 GEOJSON_FILE  = "/mnt/c/Work/pypsa-ar-sandbox/Official data/GEOSADI/GEOJSON/lineas_alta_tension.geojson"
 
-BUSES_FINAL   = os.path.join(DATA_DIR, "buses_500kv_final.csv")
+BUSES_FINAL   = os.path.join(DATA_DIR, "buses_final.csv")
 LINES_RAW     = os.path.join(DATA_DIR, "lines_500kv_raw.csv")
 MANUAL_MAP    = os.path.join(DATA_DIR, "manual_line_mappings.csv")
 OUTPUT_FILE   = os.path.join(DATA_DIR, "lines_500kv_final.csv")
@@ -370,7 +370,7 @@ def main():
             print(f"  {r['line_key']:<42}  bus_i={r['bus_i']}  bus_j={r['bus_j']}")
 
     print(f"\n✔ {OUTPUT_FILE}  ({len(output_rows)} filas)")
-    print("Proximo: 05_validate_topology.py")
+    print("Proximo: 07_validate_topology.py")
 
 
 if __name__ == "__main__":

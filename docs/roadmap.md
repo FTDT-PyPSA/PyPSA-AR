@@ -21,7 +21,7 @@ incorporar niveles de tensión inferiores. Cada nivel se valida antes de avanzar
 Objetivo: entender qué modelaba PyPSA-Earth para AR y decidir si reutilizar o reemplazar.
 
 Resultado: se decidió reemplazar toda la data de OSM por GeoSADI + PSS/E.
-Razones documentadas en `Aprendizaje_pypsaearth_ar.txt`.
+Razones documentadas en `docs/aprendizaje_pypsaearth_ar.md`.
 
 Hallazgos clave:
 - PyPSA-Earth tiene 125 transformadores vs 1.132 reales (11% cobertura)
@@ -38,43 +38,44 @@ Scripts desarrollados:
 
 | Script | Descripción | Estado |
 |--------|-------------|--------|
-| 01_parse_raw_buses.py | Extrae buses 500 kV del PSS/E | ✅ |
-| 02_parse_raw_lines.py | Extrae líneas 500 kV del PSS/E | ✅ |
-| 03_match_geosadi_coords.py | Asigna coordenadas GeoSADI a buses | ✅ |
-| 04_match_geosadi_geometry.py | Asigna geometría WKT a líneas | ✅ |
-| 05_validate_topology.py | Valida topología de la red | ✅ |
-| 05b_export_qgis.py | Exporta a GeoPackage para QGIS | ✅ |
-| 06_build_pypsa_network.py | Construye objeto PyPSA Network | 🔲 |
+| `01_parse_raw_buses.py` | Extrae buses 500 kV del PSS/E | ✅ |
+| `02_parse_raw_lines.py` | Extrae líneas 500 kV del PSS/E | ✅ |
+| `03_parse_raw_transformers.py` | Extrae transformadores con lado en 500 kV | ✅ |
+| `04_parse_raw_buses_sec.py` | Extrae buses secundarios de los transformadores | ✅ |
+| `05_match_geosadi_coords.py` | Asigna coordenadas y consolida todos los buses | ✅ |
+| `06_match_geosadi_geometry.py` | Asigna geometría WKT a líneas | ✅ |
+| `07_validate_topology.py` | Valida topología de la red | ✅ |
+| `07b_export_qgis.py` | Exporta a GeoPackage para QGIS | ✅ |
+| `08_build_pypsa_network.py` | Construye objeto PyPSA Network | 🔲 |
 
 Estado actual de la red 500 kV:
-- 96 buses (94 OK, 2 CONSULTAR: T PEPE y R9B5RS)
-- 122 líneas (114 en servicio, 8 fuera de servicio en este snapshot)
-- 15 compensadores serie
+- 95 buses 500 kV + 266 buses secundarios = 361 buses totales
+- 122 líneas (105 en servicio, 17 compensadores serie)
+- 301 transformadores (65 de 2W + 118 de 3W descompuestos en 2 × 2W)
 - sin_match = 0 en geometría
-- Red principal: 92 buses en una componente conexa
+- Red 500 kV: 1 componente conexa, 0 buses aislados
 
 Pendientes antes de cerrar la fase:
-- Check visual en QGIS
-- Script 06: construir objeto PyPSA con impedancias reales
+- Resolver T PEPE (1 trafo huérfano, 2 líneas pendiente_bus)
+- Script 08: construir objeto PyPSA con impedancias reales
 
 ---
 
 ## Fase 3 — Generación y demanda 500 kV 🔲 PENDIENTE
 
-Objetivo: incorporar generación y demanda únicamente para la red 500 kV y que cierre.
-
+Objetivo: incorporar generación y demanda para la red 500 kV y verificar que el modelo converge.
 
 Tareas:
-- Mapear centrales eléctricas a buses 500 kV
+- Mapear centrales eléctricas a buses (500 kV o secundarios según corresponda)
 - Asignar perfiles de demanda por nodo
-- Correr simulación y verificar que la red converge
+- Correr simulación y verificar convergencia
 
 ---
 
 ## Fase 4 — Incorporar niveles 220, 330, 132 kV 🔲 PENDIENTE
 
 Mismo pipeline que 500 kV, nivel por nivel.
-Scripts 01-05 son reutilizables con distintos filtros de tensión.
+Scripts 01–08 son reutilizables con distintos filtros de tensión.
 Incorporar transformadores inter-nivel.
 
 ---

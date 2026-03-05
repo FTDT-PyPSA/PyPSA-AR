@@ -12,10 +12,11 @@ La red 500 kV es el backbone del SADI y el punto de partida.
 ## Scope del modelo
 
 **v0.1 — Red 500 kV completa:**
-- Todos los buses y líneas 500 kV del SADI
-- Impedancias reales del PSS/E (r, x, b en pu, Sbase=100 MVA)
-- Compensadores serie identificados y modelados
-- Generación y demanda mapeadas a nodos 500 kV
+- Todos los buses 500 kV y sus buses secundarios (lado bajo de transformadores)
+- Líneas con impedancias reales del PSS/E (r, x, b en pu, Sbase=100 MVA)
+- Compensadores serie identificados y modelados como Line con x negativo
+- Transformadores de 3 devanados descompuestos en 2 × 2W con bus 500 kV como referencia
+- Generación y demanda mapeadas a buses según nivel de tensión
 
 **v0.2 y siguientes:**
 - Incorporar niveles 220, 330, 132 kV uno a uno
@@ -44,16 +45,18 @@ GeoSADI: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba205
 ## Pipeline de construcción
 
 ```
-PSS/E .raw ──→ 01_parse_raw_buses.py ──→ buses_500kv_raw.csv
-               02_parse_raw_lines.py ──→ lines_500kv_raw.csv
+PSS/E .raw ──→ 01_parse_raw_buses.py          ──→ buses_500kv_raw.csv
+               02_parse_raw_lines.py           ──→ lines_500kv_raw.csv
+               03_parse_raw_transformers.py    ──→ trafos_500kv_raw.csv
+               04_parse_raw_buses_sec.py       ──→ buses_sec_raw.csv
                         │
-GeoSADI ────→ 03_match_geosadi_coords.py   ──→ buses_500kv_final.csv
-              04_match_geosadi_geometry.py  ──→ lines_500kv_final.csv
+GeoSADI ────→ 05_match_geosadi_coords.py      ──→ buses_final.csv
+              06_match_geosadi_geometry.py     ──→ lines_500kv_final.csv
                         │
-              05_validate_topology.py   ──→ topology_report.csv
-              05b_export_qgis.py        ──→ red_500kv_qgis.gpkg
+              07_validate_topology.py          ──→ topology_report.csv
+              07b_export_qgis.py               ──→ red_500kv_qgis.gpkg
                         │
-              06_build_pypsa_network.py ──→ network_500kv.nc
+              08_build_pypsa_network.py        ──→ network_500kv.nc
 ```
 
 Todos los scripts corren desde WSL con el entorno `pypsa-earth-lock`.
@@ -64,18 +67,20 @@ Rutas en `/mnt/c/Work/pypsa-ar-base/`.
 ## Capas del modelo PyPSA
 
 ### 1. Red física
-- Buses con coordenadas y nivel de tensión
+- Buses 500 kV con coordenadas GeoSADI y nivel de tensión
+- Buses secundarios heredando coordenadas del bus 500 kV padre
 - Líneas con r, x, b, s_nom, length
-- Compensadores serie como elementos separados
+- Compensadores serie como Line con x negativo
+- Transformadores con x, s_nom
 
 ### 2. Generación
-- Centrales mapeadas a buses por proximidad geográfica y nivel de tensión
+- Centrales mapeadas a buses por nivel de tensión
 - Parámetros: p_nom, carrier, marginal_cost, efficiency
 - Perfiles de disponibilidad para renovables
 
 ### 3. Demanda
 - Perfiles horarios 8760h (año base 2024)
-- Desagregados por nodo usando densidad poblacional o datos CAMMESA
+- Desagregados por nodo
 
 ### 4. Calibración
 - Simulación DC power flow

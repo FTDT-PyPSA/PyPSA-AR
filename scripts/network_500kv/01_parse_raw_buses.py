@@ -2,8 +2,8 @@
 01_parse_raw_buses.py
 Extrae buses 500 kV del .raw del SADI y exporta a CSV.
 
-Fuente : C:/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw
-Output : C:/Work/pypsa-ar-base/data/network_500kv/buses_500kv_raw.csv
+Fuente : Official data/PSSE/ver2526pid.raw
+Output : data/network_500kv/buses_500kv_raw.csv
 
 Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/01_parse_raw_buses.py
@@ -37,6 +37,12 @@ INTERNATIONAL_AREAS = {
     20: "Brasil",
     22: "Bolivia",
     99: "Uruguay",
+}
+
+# Buses a excluir manualmente (genuinamente aislados o sin datos suficientes)
+# Agregar bus_name a este set para excluirlo del output
+EXCLUDE_BUSES = {
+    'R9B5RS',   # bus genuinamente aislado, sin conexiones en el raw
 }
 
 # True  -> excluye internacionales del CSV
@@ -132,6 +138,16 @@ def main():
         print(f"-> Excluidos. Quedan: {len(buses_500)} buses")
     else:
         print("-> Incluidos con is_international=True  (EXCLUDE_INTERNATIONAL=False)")
+
+    # Excluir buses manuales
+    if EXCLUDE_BUSES:
+        before = len(buses_500)
+        buses_500 = [b for b in buses_500 if b['bus_name'] not in EXCLUDE_BUSES]
+        excluded = before - len(buses_500)
+        if excluded:
+            print(f"\nBuses excluidos manualmente (EXCLUDE_BUSES): {excluded}")
+            for name in EXCLUDE_BUSES:
+                print(f"  {name}")
 
     df = pd.DataFrame(buses_500)
 

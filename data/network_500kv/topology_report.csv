@@ -1,4 +1,3 @@
 tipo,elemento,detalle
-bus_aislado,R9B5RS,"sin lineas, compensadores ni transformadores"
-isla_desconectada,isla_1,R9B5RS
+trafo_huerfano,2580-T PEPE-1,buses ausentes: bus_i=2580
 sin_rating,B.BLANCA-T PEPE-1,ratea_mva = NaN
