@@ -7,7 +7,7 @@ Depende de:
     lines_500kv_final.csv   (output script 04)
 
 Output:
-    data/network_500kv/red_500kv_qgis.gpkg
+    data/GIS_psse_geosadi_pypsaearth/red_500kv_qgis.gpkg
 
     Layers:
         buses_500kv  : puntos con todos los atributos de los buses
@@ -43,7 +43,7 @@ from shapely.geometry import Point
 DATA_DIR    = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
 BUSES_FILE  = os.path.join(DATA_DIR, "buses_500kv_final.csv")
 LINES_FILE  = os.path.join(DATA_DIR, "lines_500kv_final.csv")
-OUTPUT_FILE = os.path.join(DATA_DIR, "red_500kv_qgis.gpkg")
+OUTPUT_FILE = "/mnt/c/Work/pypsa-ar-base/data/GIS_psse_geosadi_pypsaearth/red_500kv_qgis.gpkg"
 
 CRS = "EPSG:4326"   # WGS84
 
