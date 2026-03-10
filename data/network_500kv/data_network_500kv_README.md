@@ -18,7 +18,12 @@ Generados corriendo los scripts de `scripts/network_500kv/` en orden.
 | `buses_PSSE_vs_geosadi.xlsx` | Manual | Diccionario de matching bus PSS/E → coordenadas GeoSADI |
 | `manual_line_mappings.csv` | Manual | Diccionario de mapping line_key → geosadi_line_id |
 | `topology_report.csv` | `07_validate_topology.py` | Reporte de problemas topológicos |
+| `generators_mapped.csv` | `09_map_generators.py` | Tabla de lookup topológica generadores PSS/E → nodos modelo |
+| `generators_manual_assignment.csv` | `09_map_generators.py` + completar a mano | Plantilla para asignación manual de centrales sin conexión |
+| `loads_mapped.csv` | `10_map_loads.py` | Tabla de lookup topológica cargas PSS/E → nodos modelo |
 | `conexiones_internacionales.md` | Manual | Interconexiones con países vecinos en el PSS/E |
+
+> Los archivos GeoPackage (`.gpkg`) se guardan en `data/GIS_psse_geosadi_pypsaearth/`.
 
 ---
 
@@ -163,6 +168,66 @@ Reporte de problemas topológicos. Si la red está limpia el archivo está vací
 | `tipo` | `bus_aislado` / `isla_desconectada` / `sin_rating` / `linea_huerfana` / `trafo_huerfano` |
 | `elemento` | Nombre del elemento con el problema |
 | `detalle` | Descripción del problema |
+
+---
+
+### `generators_mapped.csv`
+**Fuente:** `09_map_generators.py`
+
+Tabla de lookup topológica que mapea cada unidad generadora del PSS/E al nodo del
+modelo más cercano. Propósito: cuando lleguen datos reales de generación 2024 (con
+nombres de centrales), se hace join por nombre PSS/E → `bus_destino` para inyectar
+la inyección en el nodo correcto.
+
+Totales del snapshot PSS/E: 836 generadores argentinos, 33.725 MW (STAT=1).
+
+| Campo | Descripción |
+|-------|-------------|
+| `machine_id` | ID de la máquina en PSS/E (`bus_id-id`) |
+| `bus_id` | Bus PSS/E de la máquina |
+| `bus_name_psse` | Nombre del bus PSS/E |
+| `pg_mw` | Potencia activa del caso base (MW) |
+| `pt_mw` | Potencia máxima instalada (MW) |
+| `stat` | Estado en el snapshot (1=en servicio, 0=parada) |
+| `method` | `directo` / `bfs` / `sin_conexion` |
+| `bus_destino` | `bus_name` del nodo modelo asignado |
+| `bfs_hops` | Saltos BFS hasta el nodo modelo (0 si directo) |
+
+---
+
+### `generators_manual_assignment.csv`
+**Fuente:** `09_map_generators.py` (generado) + completar a mano antes del script 11
+
+Plantilla con las centrales `sin_conexion` relevantes que requieren asignación manual
+de nodo destino. Excluye ALUAR y equivalentes Thévenin (PG negativo, PT=9999).
+~8 centrales grandes del área metropolitana GBA y NOA (~3.200 MW PG snapshot).
+
+Columnas a completar manualmente:
+- `bus_destino_manual` — `bus_name` del nodo modelo donde se inyectará la central
+- `nombre_geosadi` — nombre GeoSADI de referencia (opcional, para trazabilidad)
+
+Una vez completado, el script 11 usa este archivo como override sobre `generators_mapped.csv`.
+
+---
+
+### `loads_mapped.csv`
+**Fuente:** `10_map_loads.py`
+
+Tabla de lookup topológica que mapea cada carga del PSS/E al nodo del modelo más
+cercano. Misma estructura que `generators_mapped.csv` pero para cargas.
+
+Totales del snapshot PSS/E: 1.215 cargas argentinas, 30.128 MW (STAT=1).
+
+| Campo | Descripción |
+|-------|-------------|
+| `load_id` | ID de la carga en PSS/E (`bus_id-id`) |
+| `bus_id` | Bus PSS/E de la carga |
+| `bus_name_psse` | Nombre del bus PSS/E |
+| `pl_mw` | Potencia activa constante (MW) — único componente no nulo en el raw CAMMESA |
+| `stat` | Estado en el snapshot (1=activa) |
+| `method` | `directo` / `bfs` / `sin_conexion` |
+| `bus_destino` | `bus_name` del nodo modelo asignado |
+| `bfs_hops` | Saltos BFS hasta el nodo modelo (0 si directo) |
 
 ---
 

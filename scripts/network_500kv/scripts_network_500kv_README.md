@@ -18,7 +18,12 @@ Correr en orden desde WSL con el entorno `pypsa-earth-lock`.
 | `07_validate_topology.py` | Valida topología de la red | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `topology_report.csv` |
 | `07b_export_qgis.py` | Exporta la red a GeoPackage para QGIS | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `red_500kv_qgis.gpkg` |
 | `08_build_pypsa_network.py` | Construye el objeto PyPSA Network | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `network_500kv.nc` |
-| `aliases_geosadi.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
+| `09_map_generators.py` | Mapea generadores PSS/E → nodos del modelo vía BFS | `ver2526pid.raw` + `buses_final.csv` | `generators_mapped.csv` + `generators_manual_assignment.csv` |
+| `10_map_loads.py` | Mapea cargas PSS/E → nodos del modelo vía BFS | `ver2526pid.raw` + `buses_final.csv` | `loads_mapped.csv` |
+| `10b_visualize_qgis.py` | Exporta balance generación/carga por nodo a GeoPackage | `generators_mapped.csv` + `loads_mapped.csv` + `buses_final.csv` | `balance_gen_carga.gpkg` |
+| `aliases_500kv.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
+
+> Scripts `11_add_to_pypsa.py` y `12_run_powerflow.py` están pendientes — esperan datos reales de generación y demanda 2024.
 
 ---
 
@@ -75,7 +80,7 @@ Asigna coordenadas geográficas a todos los buses y consolida en `buses_final.cs
 Para cada línea PSS/E busca la geometría correspondiente en el GeoJSON de GeoSADI.
 El matching sigue este orden de prioridad:
 1. Diccionario manual `manual_line_mappings.csv`
-2. Matching por tokens de nombre (vía `aliases_geosadi.py`)
+2. Matching por tokens de nombre (vía `aliases_500kv.py`)
 3. Desambiguación por número de circuito para paralelas
 
 Resultados posibles en `match_status`:
@@ -107,7 +112,7 @@ Exporta toda la red a un GeoPackage con cuatro layers:
 - `lines_500kv` — líneas con geometría GeoSADI
 - `trafos_500kv` — transformadores como puntos en coordenadas del bus 500 kV padre
 
-El `.gpkg` se guarda en `data/GIS_psse_geosadi_pypsaearth/`.
+El `.gpkg` se guarda en `data/GIS_psse_geosadi_pypsaearth/red_500kv_qgis.gpkg`.
 
 ---
 
@@ -121,7 +126,75 @@ Decisiones de modelado:
 
 ---
 
-### `aliases_geosadi.py`
+### `09_map_generators.py`
+Parsea la sección `MACHINE DATA` del PSS/E y mapea cada unidad generadora al nodo
+del modelo (`buses_final.csv`) más cercano topológicamente, usando BFS sobre
+`BRANCH DATA` + `TRANSFORMER DATA`.
+
+Categorías de resultado en campo `method`:
+- `directo` — la máquina ya está en un bus del modelo
+- `bfs` — alcanzó un nodo del modelo en N saltos (típico: 1–3)
+- `sin_conexion` — la subbred del PSS/E no tiene continuidad con el backbone
+
+Grupos de `sin_conexion` identificados:
+- **Ignorar:** ALUAR (red industrial aislada) y equivalentes Thévenin del PSS/E (PG negativo, PT=9999)
+- **Asignación manual:** ~8 centrales grandes (~3.200 MW) del área metropolitana GBA y NOA — ver `generators_manual_assignment.csv`
+
+Parámetros configurables:
+- `EXCLUIR_BUS_NOMBRES` — set de buses a excluir del output (ALUAR + equivalentes)
+- `FORCE_STAT1` — incluir solo máquinas en servicio (STAT=1)
+
+Outputs:
+- `generators_mapped.csv` — tabla completa de lookup topológica (836 generadores)
+- `generators_manual_assignment.csv` — plantilla para completar `bus_destino_manual` de centrales sin conexión relevantes
+
+---
+
+### `10_map_loads.py`
+Parsea la sección `LOAD DATA` del PSS/E y mapea cada carga al nodo del modelo
+usando la misma lógica BFS que `09_map_generators.py`.
+
+Se usa únicamente el campo `PL` (potencia activa constante). Los campos `IP` e `YP`
+son cero en todo el raw de CAMMESA, por lo que PL = carga total del nodo.
+
+Categorías de resultado en campo `method`:
+- `directo` — la carga está directamente en un nodo del modelo
+- `bfs` — alcanzó un nodo del modelo en N saltos
+- `sin_conexion` — subbred sin continuidad con el backbone
+
+Nota sobre el área metropolitana GBA: ~3.720 MW de carga aparecen como `sin_conexion`
+porque la red de 132 kV de CABA/conurbano (AZCUENAG, BARRACAS, ESCALADA, etc.)
+no tiene los cables de conexión hacia las subestaciones de frontera (ABASTO, EZEIZA,
+RODRIGUEZ) modelados en el PSS/E. Los trafos 500/220/132 kV en esas subestaciones
+sí existen, pero los ramales de 132 kV hacia adentro del área no están en el raw.
+Esta carga queda agregada en esas tres subestaciones de frontera.
+
+Output:
+- `loads_mapped.csv` — tabla completa de lookup topológica (1.215 cargas)
+
+---
+
+### `10b_visualize_qgis.py`
+Calcula el balance generación/carga por nodo del modelo y exporta a GeoPackage
+para visualización en QGIS como mapa de burbujas.
+
+Layer exportado: `balance_por_bus` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
+
+Atributos del layer:
+- `pg_mw` — generación total mapeada al nodo (MW)
+- `pl_mw` — carga total mapeada al nodo (MW)
+- `balance_mw` — pg_mw − pl_mw (positivo = nodo generador, negativo = nodo consumidor)
+- `n_generadores` / `n_cargas` — cantidad de unidades mapeadas
+
+Simbología sugerida en QGIS (expresión para tamaño de burbuja):
+```
+sqrt(abs("balance_mw")) / 1.5
+```
+Verde = balance positivo (nodo generador). Rojo = balance negativo (nodo consumidor).
+
+---
+
+### `aliases_500kv.py`
 Módulo auxiliar usado por `06_match_geosadi_geometry.py`.
 Contiene el diccionario de aliases para resolver abreviaturas y variantes de nombres
 de estaciones en los nombres de líneas GeoSADI.
