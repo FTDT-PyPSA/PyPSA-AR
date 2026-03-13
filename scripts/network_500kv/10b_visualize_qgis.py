@@ -7,10 +7,10 @@ Depende:
     data/network_500kv/generators_mapped.csv   (script 09)
     data/network_500kv/loads_mapped.csv        (script 10)
     data/network_500kv/buses_final.csv         (script 05)
-    data/GIS_psse_geosadi_pypsaearth/red_500kv_qgis.gpkg  (script 07b)
 
 Output:
-    Agrega layer 'balance_por_bus' al GeoPackage existente.
+    data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg
+    Layer: 'balance_por_bus'
 
     Atributos del layer:
         bus_id           : ID del bus en el modelo
@@ -25,7 +25,6 @@ Output:
 
 Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/10b_visualize_qgis.py
-
 """
 
 import os
@@ -38,16 +37,16 @@ from shapely.geometry import Point
 # CONFIGURACION
 # =============================================================================
 
-DATA_DIR     = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-GIS_DIR      = "/mnt/c/Work/pypsa-ar-base/data/GIS_psse_geosadi_pypsaearth"
+DATA_DIR   = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
+GIS_DIR    = "/mnt/c/Work/pypsa-ar-base/data/GIS_psse_geosadi_pypsaearth"
 
-BUSES_FILE   = os.path.join(DATA_DIR, "buses_final.csv")
-GEN_FILE     = os.path.join(DATA_DIR, "generators_mapped.csv")
-LOADS_FILE   = os.path.join(DATA_DIR, "loads_mapped.csv")
-GPKG_FILE    = os.path.join(GIS_DIR,  "balance_gen_carga.gpkg")
+BUSES_FILE = os.path.join(DATA_DIR, "buses_final.csv")
+GEN_FILE   = os.path.join(DATA_DIR, "generators_mapped.csv")
+LOADS_FILE = os.path.join(DATA_DIR, "loads_mapped.csv")
+GPKG_FILE  = os.path.join(GIS_DIR,  "balance_gen_carga.gpkg")
 
-LAYER_NAME   = "balance_por_bus"
-CRS          = "EPSG:4326"
+LAYER_NAME = "balance_por_bus"
+CRS        = "EPSG:4326"
 
 
 # =============================================================================
@@ -64,7 +63,6 @@ def main():
             print(f"[ERROR] Archivo no encontrado:\n  {f}")
             sys.exit(1)
 
-    # --- Cargar datos ---
     buses = pd.read_csv(BUSES_FILE)
     gen   = pd.read_csv(GEN_FILE)
     loads = pd.read_csv(LOADS_FILE)
@@ -73,8 +71,8 @@ def main():
     print(f"Generadores cargados : {len(gen)}")
     print(f"Cargas cargadas      : {len(loads)}")
 
-    # --- Agregar generacion por bus destino ---
-    # Solo STAT=1 y excluir PT=9999 (equivalentes ficticios)
+    # --- Generacion por bus ---
+    # Solo STAT=1, excluir sin_conexion y PT=9999
     gen_activo = gen[
         (gen['match_type'] != 'sin_conexion') &
         (gen['stat'] == 1) &
@@ -82,18 +80,18 @@ def main():
     ].copy()
 
     gen_por_bus = (
-        gen_activo.groupby('bus_destino')
+        gen_activo.groupby('bus_conexion500kv')
         .agg(
-            pg_mw        = ('pg_mw',    'sum'),
+            pg_mw         = ('pg_mw',   'sum'),
             n_generadores = ('gen_key', 'count'),
         )
         .reset_index()
-        .rename(columns={'bus_destino': 'bus_id'})
+        .rename(columns={'bus_conexion500kv': 'bus_id'})
     )
     gen_por_bus['bus_id'] = gen_por_bus['bus_id'].astype(int)
 
-    # --- Agregar demanda por bus destino ---
-    # Solo STAT=1
+    # --- Demanda por bus ---
+    # loads_mapped aun usa columna bus_destino (script 10 no modificado)
     loads_activo = loads[
         (loads['match_type'] != 'sin_conexion') &
         (loads['stat'] == 1)
@@ -102,7 +100,7 @@ def main():
     loads_por_bus = (
         loads_activo.groupby('bus_destino')
         .agg(
-            pl_mw   = ('pl_mw',    'sum'),
+            pl_mw    = ('pl_mw',    'sum'),
             n_cargas = ('load_key', 'count'),
         )
         .reset_index()
@@ -125,13 +123,13 @@ def main():
     print(f"\n{'='*60}")
     print(f"RESUMEN")
     print(f"{'='*60}")
-    print(f"  Buses con generacion      : {(df['pg_mw'] > 0).sum()}")
-    print(f"  Buses con demanda         : {(df['pl_mw'] > 0).sum()}")
-    print(f"  Buses con ambos           : {((df['pg_mw'] > 0) & (df['pl_mw'] > 0)).sum()}")
-    print(f"  Buses sin ninguno         : {((df['pg_mw'] == 0) & (df['pl_mw'] == 0)).sum()}")
-    print(f"\n  PG total en layer        : {df['pg_mw'].sum():>10,.1f} MW")
-    print(f"  PL total en layer        : {df['pl_mw'].sum():>10,.1f} MW")
-    print(f"  Balance neto             : {df['balance_mw'].sum():>10,.1f} MW")
+    print(f"  Buses con generacion : {(df['pg_mw'] > 0).sum()}")
+    print(f"  Buses con demanda    : {(df['pl_mw'] > 0).sum()}")
+    print(f"  Buses con ambos      : {((df['pg_mw'] > 0) & (df['pl_mw'] > 0)).sum()}")
+    print(f"  Buses sin ninguno    : {((df['pg_mw'] == 0) & (df['pl_mw'] == 0)).sum()}")
+    print(f"\n  PG total en layer   : {df['pg_mw'].sum():>10,.1f} MW")
+    print(f"  PL total en layer   : {df['pl_mw'].sum():>10,.1f} MW")
+    print(f"  Balance neto        : {df['balance_mw'].sum():>10,.1f} MW")
 
     print(f"\n  Top 10 por PG:")
     for _, r in df.nlargest(10, 'pg_mw').iterrows():
@@ -150,7 +148,7 @@ def main():
     df_sin_coord = df[df['lat'].isna() | df['lon'].isna()].copy()
 
     if not df_sin_coord.empty:
-        print(f"\n  ⚠ {len(df_sin_coord)} buses sin coordenadas (excluidos del layer):")
+        print(f"\n  {len(df_sin_coord)} buses sin coordenadas (excluidos del layer):")
         for _, r in df_sin_coord.iterrows():
             print(f"    {r.bus_name}")
 
@@ -160,24 +158,24 @@ def main():
         crs=CRS
     )
 
-    col_order = [
+    gdf = gdf[[
         'bus_id', 'bus_name', 'bus_type', 'baskv_kv',
         'pg_mw', 'pl_mw', 'balance_mw',
         'n_generadores', 'n_cargas',
         'geometry',
-    ]
-    gdf = gdf[col_order]
+    ]]
 
-    # --- Exportar layer al GPKG ---
+    os.makedirs(GIS_DIR, exist_ok=True)
     gdf.to_file(GPKG_FILE, layer=LAYER_NAME, driver="GPKG")
 
-    print(f"\n✔ Layer '{LAYER_NAME}' agregado a {GPKG_FILE}")
-    print(f"  {len(gdf)} buses exportados")
+    print(f"\n✔ Layer '{LAYER_NAME}' exportado a {GPKG_FILE}")
+    print(f"  {len(gdf)} buses")
     print(f"\nSimbologia sugerida en QGIS:")
     print(f"  Simbologia -> Basada en reglas:")
     print(f"    balance_mw > 0  -> circulo verde, tamanio = sqrt(balance_mw) / 3")
     print(f"    balance_mw < 0  -> circulo rojo,  tamanio = sqrt(abs(balance_mw)) / 3")
     print(f"    balance_mw = 0  -> circulo gris pequenio")
+    print(f"\nProximo: 11_add_geo_to_generators.py")
 
 
 if __name__ == "__main__":

@@ -19,14 +19,21 @@ Generados corriendo los scripts de `scripts/network_500kv/` en orden.
 | `manual_line_mappings.csv` | Manual | Diccionario de mapping line_key → geosadi_line_id |
 | `topology_report.csv` | `07_validate_topology.py` | Reporte de problemas topológicos |
 | `generators_mapped.csv` | `09_map_generators.py` | Tabla de lookup topológica generadores PSS/E → nodos modelo |
-| `generators_manual_assignment_template.csv` | `09_map_generators.py` | Plantilla para asignación manual de centrales sin conexión |
-| `generators_manual_assignment_completed.csv` | Manual | Plantilla completada con asignaciones manuales de bus y nombre GeoSADI |
-| `generators_final.csv` | `11_add_geo_to_generators.py` | Generadores con coordenadas GeoSADI resueltas — input del modelo PyPSA |
-| `generators_pending.csv` | `11_add_geo_to_generators.py` | Generadores sin coordenadas GeoSADI — requieren revisión manual |
+| `generators_readypypsa.csv` | `11_add_geo_to_generators.py` | Generadores con geo + bus resueltos — candidatos directos a PyPSA |
+| `generators_manualpypsa.csv` | Manual | Pending completado manualmente con decisiones y asignaciones |
+| `generators_final.csv` | `12_build_generators_final.py` | Tabla definitiva de generadores para PyPSA |
 | `loads_mapped.csv` | `10_map_loads.py` | Tabla de lookup topológica cargas PSS/E → nodos modelo |
 | `conexiones_internacionales.md` | Manual | Interconexiones con países vecinos en el PSS/E |
 
 > Los archivos GeoPackage (`.gpkg`) se guardan en `data/GIS_psse_geosadi_pypsaearth/`.
+> El script `12b_export_qgis_generators.py` agrega el layer `centrales_electricas` al
+> GeoPackage `balance_gen_carga.gpkg` generado por el script `10b`.
+
+> El script `12c_test_snapshot.py` es de validación: carga el snapshot PSS/E al network
+> PyPSA y corre un power flow Newton-Raphson. No produce ningún archivo de datos.
+
+> `generators_pendingmanualpypsa.csv` se genera en cada corrida del script 11 pero
+> **no se versiona en git** — es un archivo de trabajo que se regenera automáticamente.
 
 ---
 
@@ -179,7 +186,7 @@ Reporte de problemas topológicos. Si la red está limpia el archivo está vací
 
 Tabla de lookup topológica que mapea cada unidad generadora del PSS/E al nodo del
 modelo más cercano. Excluye generadores internacionales (áreas 18, 19, 20, 22, 99)
-y unidades cuyo tipo tecnológico no puede resolverse (no son generadores reales).
+y unidades cuyo tipo tecnológico no puede resolverse.
 
 El carrier se extrae del campo Owner 1 del PSS/E. Si el owner no corresponde a un
 tipo de generación, se intenta inferir desde las posiciones [4:6] del bus_name
@@ -202,50 +209,13 @@ tipo de generación, se intenta inferir desde las posiciones [4:6] del bus_name
 
 ---
 
-### `generators_manual_assignment_template.csv`
-**Fuente:** `09_map_generators.py`
-
-Plantilla con las centrales `sin_conexion` relevantes que requieren asignación manual.
-Criterios de inclusión: carrier de generación válido y potencia instalada > 100 MW.
-Excluye ALUAR, AEG y equivalentes PSS/E.
-
-Columnas a completar manualmente antes de correr el script 11:
-- `bus_conexion500kv_manual` — `bus_name` exacto del nodo en `buses_final.csv`
-- `nombre_geosadi` — nombre de la central en `centrales_electricas.csv`
-
-Una vez completado, guardar como `generators_manual_assignment_completed.csv`.
-El template puede sobreescribirse al volver a correr el script 09. El `_completed`
-no es tocado por ningún script.
-
-| Campo | Descripción |
-|-------|-------------|
-| `central_prefix` | Primeros 6 caracteres del bus_name_origen |
-| `carrier` | Tipo tecnológico |
-| `area` | Región CAMMESA |
-| `n_gen` | Cantidad de generadores de esa central |
-| `pg_total_mw` | PG total en el snapshot (STAT=1) |
-| `pt_total_mw` | PT total instalada |
-| `gen_keys` | Lista de gen_key separados por `\|` |
-| `bus_ids` | Lista de bus_id_origen separados por `\|` |
-| `bus_conexion500kv_manual` | Completar manualmente |
-| `nombre_geosadi` | Completar manualmente |
-
----
-
-### `generators_manual_assignment_completed.csv`
-**Fuente:** revisión manual a partir del template
-
-Versión completada del template. Leída por `11_add_geo_to_generators.py` para resolver
-el `bus_conexion500kv` de las centrales sin conexión automática.
-
----
-
-### `generators_final.csv`
+### `generators_readypypsa.csv`
 **Fuente:** `11_add_geo_to_generators.py`
 
-Generadores con coordenadas geográficas GeoSADI resueltas. Es el archivo que entra
-al modelo PyPSA. Incluye generadores con `bus_conexion500kv` vacío (sin conexión a
-la red) — la asignación de bus puede forzarse manualmente en etapas posteriores.
+Generadores con `nombre_geosadi`, coordenadas y `bus_conexion500kv` resueltos.
+Son los candidatos directos a entrar a PyPSA. El join con la data real de generación
+2024 (CAMMESA) se hace por `nombre_geosadi` → `bus_conexion500kv`.
+Los MW del PSS/E (`pg_mw`, `pt_mw`) son solo referencia — no se cargan al modelo.
 
 Extiende `generators_mapped.csv` con:
 
@@ -253,23 +223,36 @@ Extiende `generators_mapped.csv` con:
 |-------|-------------|
 | `nombre_geosadi` | Nombre de la central en GeoSADI |
 | `lat` / `lon` | Coordenadas geográficas de la central (WGS84) |
-| `geo_match` | `exacto` — match GeoSADI resuelto |
-| `match_type` | Igual que en `generators_mapped.csv`, más `manual` para centrales resueltas via `_completed` |
+| `geo_match` | `exacto` — match GeoSADI resuelto sin ambigüedad |
 
 Nota sobre carriers especiales aplicados en este script:
 - Tipo GeoSADI `HB` (hidrobombeo) → carrier = `pumped_hydro` (único caso: Río Grande, 750 MW)
-- Tipo GeoSADI `VG` (vapor+gas mixto) → se acepta si carrier PSS/E es `ocgt`, `steam` o `ccgt`
+- Tipo GeoSADI `VG` (vapor+gas mixto) → se acepta si carrier PSS/E ∈ {ocgt, steam, ccgt}
 
 ---
 
-### `generators_pending.csv`
-**Fuente:** `11_add_geo_to_generators.py`
+### `generators_manualpypsa.csv`
+**Fuente:** revisión manual a partir de `generators_pendingmanualpypsa.csv`
 
-Generadores para los que no se pudo resolver la central GeoSADI correspondiente
-(`geo_match = 'sin_match'` o `'a_revisar'`). Requieren revisión manual para completar
-nombre y coordenadas antes de poder incorporarlos al modelo.
+Archivo completado manualmente con las decisiones tomadas sobre los generadores
+pendientes. Una fila por generador. Mismas columnas que `generators_pendingmanualpypsa.csv`.
 
-Mismas columnas que `generators_final.csv` con `lat` / `lon` vacíos.
+Para cada generador se puede:
+- Completar `nombre_geosadi` y poner `geo_match = 'manual'`
+- Completar `bus_conexion500kv` y poner `match_type = 'manual'`
+- Completar solo `COMENTARIOS` si la central no va a PyPSA (ej: `red interna ALUAR, no va a PyPSA`)
+
+El script 12 lee este archivo y filtra las filas con ambos campos completos para
+incluirlas en `generators_final.csv`.
+
+---
+
+### `generators_final.csv`
+**Fuente:** `12_build_generators_final.py`
+
+Tabla definitiva de generadores para PyPSA. Une `generators_readypypsa.csv` con las
+filas de `generators_manualpypsa.csv` que tienen `nombre_geosadi` y `bus_conexion500kv`
+completos. Es el input del modelo junto con `buses_final.csv` y `lines_500kv_final.csv`.
 
 ---
 
@@ -290,8 +273,8 @@ son cero en todo el raw de CAMMESA.
 | `pl_mw` | Potencia activa constante (MW) |
 | `stat` | Estado en el snapshot (1=activa) |
 | `match_type` | `directo` / `bfs` / `sin_conexion` |
-| `bus_conexion500kv` | bus_id del nodo del modelo asignado |
-| `bus_conexion500kv_name` | Nombre del nodo destino en el modelo |
+| `bus_destino` | bus_id del nodo del modelo asignado |
+| `bus_destino_name` | Nombre del nodo destino en el modelo |
 | `n_saltos` | Saltos BFS hasta el nodo destino |
 | `camino` | Ruta de buses PSS/E desde origen hasta destino |
 

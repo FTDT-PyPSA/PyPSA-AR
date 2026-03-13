@@ -18,10 +18,13 @@ Correr en orden desde WSL con el entorno `pypsa-earth-lock`.
 | `07_validate_topology.py` | Valida topología de la red | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `topology_report.csv` |
 | `07b_export_qgis.py` | Exporta la red a GeoPackage para QGIS | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `red_500kv_qgis.gpkg` |
 | `08_build_pypsa_network.py` | Construye el objeto PyPSA Network | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `network_500kv.nc` |
-| `09_map_generators.py` | Mapea generadores PSS/E → nodos del modelo vía BFS | `ver2526pid.raw` + `buses_final.csv` | `generators_mapped.csv` + `generators_manual_assignment_template.csv` |
+| `09_map_generators.py` | Mapea generadores PSS/E → nodos del modelo vía BFS | `ver2526pid.raw` + `buses_final.csv` | `generators_mapped.csv` |
 | `10_map_loads.py` | Mapea cargas PSS/E → nodos del modelo vía BFS | `ver2526pid.raw` + `buses_final.csv` | `loads_mapped.csv` |
 | `10b_visualize_qgis.py` | Exporta balance generación/carga por nodo a GeoPackage | `generators_mapped.csv` + `loads_mapped.csv` + `buses_final.csv` | `balance_gen_carga.gpkg` |
-| `11_add_geo_to_generators.py` | Asigna coordenadas GeoSADI y resuelve conexiones manuales | `generators_mapped.csv` + `generators_manual_assignment_completed.csv` + `buses_final.csv` + GeoSADI | `generators_final.csv` + `generators_pending.csv` |
+| `11_add_geo_to_generators.py` | Asigna coordenadas GeoSADI a los generadores | `generators_mapped.csv` + `buses_final.csv` + GeoSADI | `generators_readypypsa.csv` + `generators_pendingmanualpypsa.csv` |
+| `12_build_generators_final.py` | Join automático + manual → tabla definitiva para PyPSA | `generators_readypypsa.csv` + `generators_manualpypsa.csv` | `generators_final.csv` |
+| `12b_export_qgis_generators.py` | Agrega layer de centrales al GeoPackage de balance | `generators_final.csv` + `balance_gen_carga.gpkg` | Layer `centrales_electricas` en `balance_gen_carga.gpkg` |
+| `12c_test_snapshot.py` | Carga snapshot PSS/E al network PyPSA y corre power flow de validación | `network_500kv.nc` + `generators_final.csv` + `loads_mapped.csv` | (consola — sin archivo de salida) |
 | `aliases_500kv.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
 
 ---
@@ -149,18 +152,8 @@ en el PSS/E.
 - `bfs` — alcanzó un nodo del modelo en N saltos (típico: 1–3)
 - `sin_conexion` — la subred del PSS/E no tiene continuidad con el backbone
 
-**Grupos `sin_conexion` identificados:**
-- Ignorar: ALUAR (red industrial aislada), AEG y equivalentes Thévenin del PSS/E
-- Asignación manual: centrales del área metropolitana GBA y NOA sin continuidad
-  topológica hacia el backbone — ver `generators_manual_assignment_template.csv`
-
-Parámetros configurables:
-- `EXCLUIR_BUS_NOMBRES` — buses a excluir del template de asignación manual
-- `PT_MIN_MW` — umbral mínimo de potencia instalada para incluir en el template
-
-Outputs:
-- `generators_mapped.csv` — tabla completa (770 generadores argentinos)
-- `generators_manual_assignment_template.csv` — plantilla para completar manualmente
+Output:
+- `generators_mapped.csv` — tabla completa (una fila por generador)
 
 ---
 
@@ -177,10 +170,8 @@ Categorías de resultado en campo `match_type`:
 - `sin_conexion` — subred sin continuidad con el backbone
 
 Nota sobre el área metropolitana GBA: ~3.720 MW de carga aparecen como `sin_conexion`
-porque la red de 132 kV de CABA/conurbano (AZCUENAG, BARRACAS, ESCALADA, etc.)
-no tiene los ramales de conexión hacia las subestaciones de frontera (ABASTO, EZEIZA,
-RODRIGUEZ) modelados en el PSS/E. Los trafos 500/220/132 kV en esas subestaciones
-sí existen, pero los ramales de 132 kV hacia adentro del área no están en el raw.
+porque la red de 132 kV de CABA/conurbano no tiene los ramales de conexión hacia las
+subestaciones de frontera (ABASTO, EZEIZA, RODRIGUEZ) modelados en el PSS/E.
 Esta carga queda agregada en esas tres subestaciones de frontera.
 
 Output:
@@ -191,6 +182,9 @@ Output:
 ### `10b_visualize_qgis.py`
 Calcula el balance generación/carga por nodo del modelo y exporta a GeoPackage
 para visualización en QGIS como mapa de burbujas.
+
+Lee la columna `bus_conexion500kv` de `generators_mapped.csv` para agregar generación
+por nodo. Las cargas usan la columna `bus_destino` de `loads_mapped.csv`.
 
 Layer exportado: `balance_por_bus` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
 
@@ -209,41 +203,97 @@ Verde = balance positivo (nodo generador). Rojo = balance negativo (nodo consumi
 ---
 
 ### `11_add_geo_to_generators.py`
-Extiende `generators_mapped.csv` con coordenadas geográficas de GeoSADI y resuelve
-el `bus_conexion500kv` para las centrales con asignación manual completada.
+Extiende `generators_mapped.csv` con coordenadas geográficas de GeoSADI.
 
 **Matching geográfico:**
 Se comparan los primeros 4 caracteres del `bus_name_origen` (PSS/E) contra los
 primeros 4 caracteres del campo `Nemo` de `centrales_electricas.csv` (GeoSADI).
-Si hay múltiples candidatos, se desambigua por tipo tecnológico. Para Salto Grande
-(representación argentina vs. uruguaya) se usa un diccionario de asignación
-explícita por bus_name.
+Si hay múltiples candidatos, se desambigua por tipo tecnológico. Para casos con
+ambigüedad no resoluble automáticamente se usa el diccionario `NEMO_PREFERIDO`
+(ej: Salto Grande, representación argentina vs. uruguaya).
 
 Resultados posibles en `geo_match`:
 - `exacto` — central GeoSADI identificada sin ambigüedad
 - `sin_match` — ningún candidato en GeoSADI
 - `a_revisar` — múltiples candidatos no resolubles automáticamente
 
-**Overrides de carrier aplicados en este script:**
+**Overrides de carrier:**
 - Tipo GeoSADI `HB` → carrier = `pumped_hydro` (único caso: Río Grande, 750 MW)
 - Tipo GeoSADI `VG` → se acepta si carrier PSS/E ∈ {ocgt, steam, ccgt}; si no → `VG_revisar`
 
-**Resolución manual de `bus_conexion500kv`:**
-Para generadores `sin_conexion`, se hace join por `central_prefix` (primeros 6
-caracteres del bus_name) contra `generators_manual_assignment_completed.csv`.
-Si la entrada tiene `bus_conexion500kv_manual` completo, el `match_type` se actualiza
-de `sin_conexion` a `manual`.
-
 **Criterio de separación de outputs:**
-- `generators_final.csv` — todos los generadores con `geo_match='exacto'`. Incluye
-  generadores sin `bus_conexion500kv` resuelto; la conexión puede forzarse en etapas
-  posteriores si se dispone de datos adicionales.
-- `generators_pending.csv` — generadores con `geo_match='sin_match'` o `'a_revisar'`.
-  Requieren revisión manual para completar coordenadas antes de incorporarlos al modelo.
+- `generators_readypypsa.csv` — tiene `geo_match='exacto'`, `bus_conexion500kv` resuelto
+  y carrier válido. Son los candidatos directos a entrar a PyPSA una vez se incorpore
+  la generación real 2024. El join con esa data se hace por `nombre_geosadi` → `bus_conexion500kv`.
+- `generators_pendingmanualpypsa.csv` — le falta `nombre_geosadi`, `bus_conexion500kv`,
+  o ambos. Una fila por generador. Columna `falta` indica qué falta (`geo`/`bus`/`ambos`).
+  Columna `COMENTARIOS` vacía para registrar la decisión tomada (ej: `red interna ALUAR,
+  no va a PyPSA`). **No se versiona en git** — se regenera en cada corrida.
+
+Una vez completado el pending manualmente se guarda como `generators_manualpypsa.csv`
+(ese sí se versiona). El script 12 hace el join final.
 
 Parámetros configurables:
 - `NEMO_PREFERIDO` — diccionario bus_name_origen → Nemo GeoSADI para casos especiales
 - `VG_CARRIERS_VALIDOS` — carriers aceptables para centrales de tipo VG en GeoSADI
+
+---
+
+### `12_build_generators_final.py`
+Une `generators_readypypsa.csv` con las filas de `generators_manualpypsa.csv` que
+tienen ambos campos completos (`nombre_geosadi` y `bus_conexion500kv`) para producir
+`generators_final.csv` — la tabla definitiva de generadores que entra a PyPSA.
+
+El join con la data real de generación 2024 (CAMMESA) se hace por `nombre_geosadi`
+→ `bus_conexion500kv`. Los MW del PSS/E (`pg_mw`, `pt_mw`) son solo referencia y
+no se cargan al modelo.
+
+---
+
+### `12b_export_qgis_generators.py`
+Agrega un layer de centrales eléctricas al GeoPackage `balance_gen_carga.gpkg` generado
+por el script `10b`. Requiere que ese `.gpkg` ya exista.
+
+Layer exportado: `centrales_electricas` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
+
+Atributos del layer:
+- `gen_key` — clave única PSS/E
+- `bus_name_origen` — nombre del bus origen en PSS/E
+- `nombre_geosadi` — nombre de la central en GeoSADI
+- `bus_conexion500kv_name` — nodo del modelo al que conecta
+- `carrier` — tipo tecnológico
+- `pg_mw` — despacho en snapshot PSS/E (MW)
+- `pt_mw` — potencia instalada (MW)
+- `stat` — estado en snapshot PSS/E (1=en servicio)
+- `match_type` — cómo se resolvió la conexión al modelo
+
+Se excluyen generadores con `pt_mw >= 9000` (equivalentes ficticios del PSS/E)
+y generadores sin coordenadas geográficas.
+
+---
+
+### `12c_test_snapshot.py`
+Carga los generadores y cargas del snapshot PSS/E al objeto PyPSA Network y corre
+un power flow Newton-Raphson para validar la topología y el balance de la red.
+
+Antes del power flow detecta y elimina subredes aisladas (buses desconectados de la
+red principal, típicamente remanentes de `match_status='pendiente_bus'`).
+
+Slack bus: `ATUCHA 2_21kV` (bus 2620, central nuclear, 21 kV).
+
+Pasos de ejecución:
+1. Detección y eliminación de subredes aisladas
+2. Carga de generadores activos (`stat=1`, `pt_mw < 9000`) con sus despachos del snapshot
+3. Carga de cargas activas (`stat=1`, `pl_mw > 0`)
+4. Power flow Newton-Raphson
+
+Resultados reportados en consola:
+- Tensiones nodales (mín / máx / buses fuera de [0.90, 1.10] pu)
+- Buses con tensión crítica (si los hay)
+- Carga de líneas con rating definido y líneas sobrecargadas (>100%)
+
+No produce archivo de salida — es un script de validación. Si el power flow converge,
+la topología y el balance generación/carga del snapshot están consistentes.
 
 ---
 

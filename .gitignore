@@ -5,6 +5,7 @@ old/
 experiments/
 config/paths.local.yaml
 __pycache__/
+data/network_500kv/generators_pendingmanualpypsa.csv
 *.pyc
 *.nc
 

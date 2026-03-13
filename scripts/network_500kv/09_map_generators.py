@@ -10,9 +10,11 @@ Si BFS no encuentra ningun nodo del modelo -> match_type='sin_conexion'
 Fuente : Official data/PSSE/ver2526pid.raw
 Depende: data/network_500kv/buses_final.csv
 
-Outputs:
+Output:
     data/network_500kv/generators_mapped.csv
-    data/network_500kv/generators_manual_assignment_template.csv
+        Un generador por fila. Para todos los match_type.
+        Usado por el script 11 para asignar coordenadas GeoSADI y
+        construir generators_readypypsa + generators_pendingmanualpypsa.
 
 Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/09_map_generators.py
@@ -41,36 +43,33 @@ ALGORITMO BFS:
 DESEMPATE EN BFS:
     Si en el mismo nivel de exploracion el BFS encuentra multiples nodos
     de buses_final.csv simultaneamente, se elige el nodo con mayor baskv_kv.
+    Razon: los buses de mayor tension representan el punto de conexion
+    electrica mas natural.
 
 FILTRO DE INTERNACIONALES:
-    Se excluyen generadores cuyo bus pertenece a areas CAMMESA
-    correspondientes a sistemas electricos vecinos:
+    Se excluyen generadores cuyo bus pertenece a areas CAMMESA de
+    sistemas electricos vecinos:
         18=Paraguay, 19=Chile (SING), 20=Brasil, 22=Bolivia, 99=Uruguay
 
 CAMPO CARRIER:
     Extraido del campo O1 (Owner 1) de GENERATOR DATA, resuelto contra
     OWNER DATA del mismo raw. Los owner IDs en OWNER_ID_TO_CARRIER se
-    mapean a carriers PyPSA estandar. 
+    mapean a carriers PyPSA estandar. El resto conservan su nombre
+    original de OWNER DATA (ej: DEMANDA, SS.AA., TRANSPORTE).
 
 FILTRO Y CORRECCION DE CARRIERS NO VALIDOS:
-    Si el carrier resuelto NO pertenece a GENERATION_CARRIERS (es decir,
-    es DEMANDA, SS.AA., TRANSPORTE, unknown u otro owner no generador),
-    se inspecciona el bus_name_origen buscando un codigo de tecnologia
-    en las posiciones [4:6] o [4:8] para nuclear (NUCL).
+    Si el carrier resuelto NO pertenece a GENERATION_CARRIERS, se
+    inspecciona el bus_name_origen buscando un codigo de tecnologia
+    en las posiciones [4:6] o [4:8] para nuclear.
 
-    Codigos reconocidos en el nombre:
+    Codigos reconocidos:
         TG -> ocgt       TV -> steam      HI -> hydro
         DI -> diesel     CC -> ccgt       FV -> solar
         EO -> wind       BG -> biogas     BM -> biomass
-        HB -> pumped_hydro   NUCL -> nuclear
+        HB -> pumped_hydro   NUCL[4:8] -> nuclear
 
     Si se encuentra un codigo valido: se sobreescribe el carrier.
     Si no se encuentra: el generador se descarta del output.
-
-    Razon: buses como SOLATG01, GEBATG01, etc. tienen owner incorrecto
-    en el raw pero su tipo tecnologico es identificable por el nombre.
-    Buses sin codigo reconocible (C.RI, TREW, LASH, etc.) son
-    equivalentes de red o nodos de demanda, no generadores reales.
 
 COLUMNAS DEL OUTPUT generators_mapped.csv:
     gen_key               : bus_id_origen-gen_id, clave unica PSS/E
@@ -82,25 +81,9 @@ COLUMNAS DEL OUTPUT generators_mapped.csv:
     stat                  : estado en snapshot (1=en servicio, 0=fuera)
     match_type            : 'directo' / 'bfs' / 'sin_conexion'
     bus_conexion500kv     : bus_id del nodo de buses_final.csv asignado
-    bus_conexion500kv_name: nombre del nodo destino
+    bus_conexion500kv_name: nombre del nodo destino en el modelo
     n_saltos              : saltos BFS hasta destino (0=directo, -1=sin_conexion)
-    camino                : ruta de buses desde origen hasta destino
-
-COLUMNAS DEL OUTPUT generators_manual_assignment_template.csv:
-    central_prefix          : primeros 6 caracteres del bus_name_origen
-    carrier                 : tipo tecnologico
-    area                    : region CAMMESA
-    n_gen                   : cantidad de generadores de esa central
-    pg_total_mw             : PG total en snapshot (solo STAT=1)
-    pt_total_mw             : PT total (excluye PT=9999)
-    gen_keys                : lista de gen_key separados por |
-    bus_ids                 : lista de bus_id_origen separados por |
-    bus_conexion500kv_manual: completar manualmente
-    nombre_geosadi          : completar manualmente
-
-    Una vez completado, guardar como generators_manual_assignment_completed.csv.
-    El template puede sobreescribirse al volver a correr este script.
-    El _completed no es tocado por este script y es el que lee el script 11.
+    camino                : ruta de buses PSS/E desde origen hasta destino
 """
 
 import os
@@ -112,21 +95,12 @@ from collections import deque, defaultdict
 # CONFIGURACION
 # =============================================================================
 
-RAW_FILE        = "/mnt/c/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw"
-BUSES_FILE      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_final.csv"
-OUTPUT_DIR      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-OUTPUT_CSV      = os.path.join(OUTPUT_DIR, "generators_mapped.csv")
-OUTPUT_TEMPLATE = os.path.join(OUTPUT_DIR, "generators_manual_assignment_template.csv")
+RAW_FILE   = "/mnt/c/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw"
+BUSES_FILE = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_final.csv"
+OUTPUT_DIR = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
+OUTPUT_CSV = os.path.join(OUTPUT_DIR, "generators_mapped.csv")
 
 INTERNATIONAL_AREAS = {18, 19, 20, 22, 99}
-
-EXCLUIR_BUS_NOMBRES = {
-    'AL-FIAT1', 'AL-FIAT2', 'AL-FIAT3', 'AL-FIAT4',
-    'ALUATG05', 'ALUATG06', 'ALUATG07', 'ALUATG08', 'ALUATV01',
-    'AEG', 'LPER2132', 'PT1-132R', 'PTRUN35R',
-}
-
-PT_MIN_MW = 100.0
 
 OWNER_ID_TO_CARRIER = {
     4:  'ocgt',
@@ -144,8 +118,6 @@ OWNER_ID_TO_CARRIER = {
 
 GENERATION_CARRIERS = set(OWNER_ID_TO_CARRIER.values())
 
-# Codigos de tecnologia reconocibles en posiciones [4:6] del bus_name
-# (o [4:8] para nuclear). Se usan para corregir carriers incorrectos.
 NAME_CODE_TO_CARRIER = {
     'TG': 'ocgt',
     'TV': 'steam',
@@ -161,16 +133,10 @@ NAME_CODE_TO_CARRIER = {
 
 
 def carrier_from_name(bus_name):
-    """
-    Intenta inferir el carrier a partir del bus_name.
-    Busca codigo de tecnologia en posiciones [4:6] o [4:8] para nuclear.
-    Retorna el carrier inferido o None si no reconoce ningun codigo.
-    """
+    """Intenta inferir carrier desde posiciones [4:6] o [4:8] del bus_name."""
     name = bus_name.upper().strip()
-    # Nuclear: posiciones 4:8
     if len(name) >= 8 and name[4:8] == 'NUCL':
         return 'nuclear'
-    # Resto: posiciones 4:6
     if len(name) >= 6:
         code = name[4:6]
         if code in NAME_CODE_TO_CARRIER:
@@ -199,11 +165,6 @@ def get_section(lines, begin_marker, end_marker):
 
 
 def parse_owner_data(lines):
-    """
-    Parsea OWNER DATA. Retorna dict owner_id -> carrier string.
-    IDs en OWNER_ID_TO_CARRIER se mapean a carrier PyPSA.
-    El resto conservan su nombre original de OWNER DATA.
-    """
     owner_to_carrier = {}
     for line in get_section(lines, 'BEGIN OWNER DATA', 'END OF OWNER DATA'):
         try:
@@ -217,7 +178,6 @@ def parse_owner_data(lines):
 
 
 def parse_area_data(lines):
-    """Parsea AREA DATA. Retorna dict area_id -> area_name."""
     area_to_name = {}
     for line in get_section(lines, 'BEGIN AREA DATA', 'END OF AREA DATA'):
         try:
@@ -280,16 +240,8 @@ def parse_graph(lines):
 
 
 def parse_generators(lines, all_bus_ids, id_to_area, owner_to_carrier):
-    """
-    Parsea GENERATOR DATA. Extrae carrier desde O1.
-    Si el carrier no es de generacion, intenta inferirlo desde el nombre.
-    Descarta generadores cuyo carrier no puede resolverse.
-    """
-    gens         = []
-    n_intl       = 0
-    n_dropped    = 0
-    n_corrected  = 0
-
+    gens   = []
+    n_intl = 0
     for line in get_section(lines, 'BEGIN GENERATOR DATA', 'END OF GENERATOR DATA'):
         try:
             bus_id = int(line[:line.index(',')].strip())
@@ -305,23 +257,11 @@ def parse_generators(lines, all_bus_ids, id_to_area, owner_to_carrier):
             pg   = float(rest[0])
             stat = int(rest[12])
             pt   = float(rest[14])
-
             try:
                 o1      = int(rest[16])
                 carrier = owner_to_carrier.get(o1, 'unknown')
             except (IndexError, ValueError):
                 carrier = 'unknown'
-
-            # Corregir o descartar carriers no validos
-            if carrier not in GENERATION_CARRIERS:
-                inferred = carrier_from_name(
-                    all_bus_ids if isinstance(all_bus_ids, str)
-                    else next((v for k, v in id_to_area.items() if False), '')
-                )
-                # Obtener bus_name para inferir carrier
-                bus_name_raw = line  # placeholder, se resuelve abajo
-                inferred = None  # reset, se calcula en bloque siguiente
-
             gens.append({
                 'bus_id_origen': bus_id,
                 'gen_id'       : gen_id,
@@ -333,24 +273,14 @@ def parse_generators(lines, all_bus_ids, id_to_area, owner_to_carrier):
             })
         except:
             continue
-
     print(f"  Generadores internacionales excluidos : {n_intl}")
-
-    # Segunda pasada: resolver carriers invalidos usando bus_name
-    # (en este punto ya tenemos id_to_name disponible en el caller)
     return gens, n_intl
 
 
 def resolve_carriers(gens, id_to_name):
-    """
-    Resuelve carriers invalidos usando el nombre del bus.
-    Descarta generadores cuyo carrier no puede resolverse.
-    Retorna lista limpia y contadores para el reporte.
-    """
     out         = []
     n_corrected = 0
     n_dropped   = 0
-
     for g in gens:
         carrier = g['_carrier_raw']
         if carrier not in GENERATION_CARRIERS:
@@ -362,11 +292,9 @@ def resolve_carriers(gens, id_to_name):
             else:
                 n_dropped += 1
                 continue
-
         g2 = {k: v for k, v in g.items() if k != '_carrier_raw'}
         g2['carrier'] = carrier
         out.append(g2)
-
     return out, n_corrected, n_dropped
 
 
@@ -452,7 +380,7 @@ def main():
     print(f"\nResolviendo carriers...")
     gens, n_corrected, n_dropped = resolve_carriers(gens_raw, id_to_name)
     print(f"  Corregidos desde nombre del bus : {n_corrected}")
-    print(f"  Descartados (sin carrier valid) : {n_dropped}")
+    print(f"  Descartados (sin carrier valido): {n_dropped}")
     print(f"  Generadores finales             : {len(gens)}")
 
     print(f"\nMapeando generadores al modelo...")
@@ -470,7 +398,7 @@ def main():
                 **g,
                 'bus_name_origen'      : orig_name,
                 'match_type'           : 'directo',
-                'bus_conexion500kv'     : bus_orig,
+                'bus_conexion500kv'    : bus_orig,
                 'bus_conexion500kv_name': model_id_to_name[bus_orig],
                 'n_saltos'             : 0,
                 'camino'               : '',
@@ -485,7 +413,7 @@ def main():
                     **g,
                     'bus_name_origen'      : orig_name,
                     'match_type'           : 'bfs',
-                    'bus_conexion500kv'     : bus_dest,
+                    'bus_conexion500kv'    : bus_dest,
                     'bus_conexion500kv_name': model_id_to_name.get(bus_dest, str(bus_dest)),
                     'n_saltos'             : n_saltos,
                     'camino'               : ' -> '.join(camino_names),
@@ -496,7 +424,7 @@ def main():
                     **g,
                     'bus_name_origen'      : orig_name,
                     'match_type'           : 'sin_conexion',
-                    'bus_conexion500kv'     : '',
+                    'bus_conexion500kv'    : '',
                     'bus_conexion500kv_name': '',
                     'n_saltos'             : -1,
                     'camino'               : '',
@@ -517,10 +445,10 @@ def main():
     print(f"\n{'='*60}")
     print(f"RESUMEN")
     print(f"{'='*60}")
-    print(f"  Total generadores         : {len(df)}")
-    print(f"  directo                   : {n_directo}  ({n_directo/len(df)*100:.1f}%)")
-    print(f"  bfs                       : {n_bfs}  ({n_bfs/len(df)*100:.1f}%)")
-    print(f"  sin_conexion              : {n_sin_con}  ({n_sin_con/len(df)*100:.1f}%)")
+    print(f"  Total generadores  : {len(df)}")
+    print(f"  directo            : {n_directo}  ({n_directo/len(df)*100:.1f}%)")
+    print(f"  bfs                : {n_bfs}  ({n_bfs/len(df)*100:.1f}%)")
+    print(f"  sin_conexion       : {n_sin_con}  ({n_sin_con/len(df)*100:.1f}%)")
 
     print(f"\n  MW por match_type (pt_mw, excluye PT=9999):")
     for mt, grp in df.groupby('match_type'):
@@ -531,8 +459,6 @@ def main():
     activos = df[(df['stat'] == 1) & (df['pt_mw'] < 9990)]
     for carrier, grp in activos.groupby('carrier'):
         print(f"    {carrier:<15}: {len(grp):>4} gen   {grp['pt_mw'].sum():>10,.1f} MW")
-
-    print(f"\n  PG total STAT=1           : {activos['pg_mw'].sum():>10,.1f} MW")
 
     print(f"\n  Distribucion de n_saltos (solo bfs):")
     for saltos, grp in df[df['match_type'] == 'bfs'].groupby('n_saltos'):
@@ -547,58 +473,10 @@ def main():
     for name, row in top.iterrows():
         print(f"    {name:<30}: {row['n_gen']:>4.0f} gen   {row['mw_total']:>8,.1f} MW")
 
-    # ==========================================================
-    # EXPORTAR generators_mapped.csv
-    # ==========================================================
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df.to_csv(OUTPUT_CSV, index=False)
     print(f"\n✔ {OUTPUT_CSV}  ({len(df)} filas)")
-
-    # ==========================================================
-    # EXPORTAR generators_manual_assignment_template.csv
-    # ==========================================================
-    sin_conn = df[
-        (df['match_type'] == 'sin_conexion') &
-        (~df['bus_name_origen'].isin(EXCLUIR_BUS_NOMBRES)) &
-        (df['pt_mw'] < 9000) &
-        (df['carrier'].isin(GENERATION_CARRIERS))
-    ].copy()
-
-    sin_conn['central_prefix'] = sin_conn['bus_name_origen'].str[:6]
-    sin_conn['area_id']        = sin_conn['bus_id_origen'].map(id_to_area)
-    sin_conn['area']           = sin_conn['area_id'].map(area_to_name).fillna('desconocida')
-
-    resumen = (
-        sin_conn.groupby('central_prefix')
-        .agg(
-            carrier     = ('carrier',       'first'),
-            area        = ('area',          'first'),
-            n_gen       = ('gen_key',       'count'),
-            pg_total_mw = ('pg_mw',         lambda x: x[sin_conn.loc[x.index, 'stat'] == 1].sum()),
-            pt_total_mw = ('pt_mw',         lambda x: x[x < 9000].sum()),
-            gen_keys    = ('gen_key',        lambda x: '|'.join(x.astype(str))),
-            bus_ids     = ('bus_id_origen',  lambda x: '|'.join(x.astype(str))),
-        )
-        .reset_index()
-    )
-    resumen = resumen[resumen['pt_total_mw'] > PT_MIN_MW].sort_values('pt_total_mw', ascending=False)
-    resumen['bus_conexion500kv_manual'] = ''
-    resumen['nombre_geosadi']           = ''
-    resumen = resumen[[
-        'central_prefix', 'carrier', 'area', 'n_gen',
-        'pg_total_mw', 'pt_total_mw', 'gen_keys', 'bus_ids',
-        'bus_conexion500kv_manual', 'nombre_geosadi',
-    ]]
-    resumen.to_csv(OUTPUT_TEMPLATE, index=False)
-
-    print(f"\n{'='*60}")
-    print(f"TEMPLATE ASIGNACION MANUAL")
-    print(f"{'='*60}")
-    print(f"  {len(resumen)} centrales  /  {resumen['pt_total_mw'].sum():.0f} MW")
-    for _, r in resumen.iterrows():
-        print(f"    {r.central_prefix:<12}  carrier={r.carrier:<10}  area={r.area:<12}  pt={r.pt_total_mw:>6.0f} MW")
-    print(f"\n✔ {OUTPUT_TEMPLATE}  ({len(resumen)} filas)")
-    print(f"\nProximo: 10_map_loads.py")
+    print(f"\nProximo: 11_add_geo_to_generators.py")
 
 
 if __name__ == "__main__":
