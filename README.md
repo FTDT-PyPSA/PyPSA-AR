@@ -2,7 +2,7 @@
 
 Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
 
-**Estado actual:** Construcción red 500 kV — pipeline 01→07b completo, script 08 pendiente.
+**Estado actual:** Pipeline 500 kV completo — scripts 01→12c finalizados, validación DC con snapshot PSS/E exitosa.
 **Fecha límite:** 30/04/2026
 
 ---
@@ -64,10 +64,11 @@ which python
 
 ### Correr el pipeline 500 kV
 
-Los scripts se ejecutan desde WSL. Reemplazá `<ruta-al-repo>` con la ruta local al repo
+Los scripts se ejecutan desde WSL en orden. Reemplazá `<ruta-al-repo>` con la ruta local al repo
 (ej: `/mnt/c/Work/pypsa-ar-base`):
 
 ```bash
+# Construcción de la red 500 kV
 python <ruta-al-repo>/scripts/network_500kv/01_parse_raw_buses.py
 python <ruta-al-repo>/scripts/network_500kv/02_parse_raw_lines.py
 python <ruta-al-repo>/scripts/network_500kv/03_parse_raw_transformers.py
@@ -76,9 +77,20 @@ python <ruta-al-repo>/scripts/network_500kv/05_match_geosadi_coords.py
 python <ruta-al-repo>/scripts/network_500kv/06_match_geosadi_geometry.py
 python <ruta-al-repo>/scripts/network_500kv/07_validate_topology.py
 python <ruta-al-repo>/scripts/network_500kv/07b_export_qgis.py
+python <ruta-al-repo>/scripts/network_500kv/08_build_pypsa_network.py
+
+# Mapeo de generación y demanda
+python <ruta-al-repo>/scripts/network_500kv/09_map_generators.py
+python <ruta-al-repo>/scripts/network_500kv/10_map_loads.py
+python <ruta-al-repo>/scripts/network_500kv/10b_visualize_qgis.py
+python <ruta-al-repo>/scripts/network_500kv/11_add_geo_to_generators.py
+# → completar generators_pendingmanualpypsa.csv (output de script 11)  antes de continuar o usar generators_manualpypsa.csv de la carpeta del repo \data\network_500kv (Archivo completado manualmente por Juan para modelo actual)
+python <ruta-al-repo>/scripts/network_500kv/12_build_generators_final.py
+python <ruta-al-repo>/scripts/network_500kv/12b_export_qgis_generators.py
+python <ruta-al-repo>/scripts/network_500kv/12c_test_snapshot.py  # validación DC
 ```
 
-> **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI) están hardcodeadas en la sección
+> **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI, CAMMESA) están hardcodeadas en la sección
 > `CONFIGURACION` al inicio de cada script. Si tu estructura de carpetas es distinta, actualizalas antes de correr.
 
 ---
