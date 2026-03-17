@@ -14,6 +14,15 @@ Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/08_build_pypsa_network.py
 
 Decisiones de modelado:
+    FUSION DE ACOPLADORES DE BARRA:
+        Los compensadores serie con r=0 exacto son acopladores de barra
+        (bus section couplers): conectan barras internas de la misma
+        subestacion fisica y tienen admitancia infinita, lo que hace
+        singular el Jacobiano del Newton-Raphson.
+        Se detectan automaticamente y se fusionan sus buses al representante
+        del grupo (menor bus_id) antes de agregar lineas y trafos.
+        Los CSVs originales no se modifican — la fusion es solo en memoria.
+
     BUSES:
         - Todos los buses del buses_final.csv (500kV + secundarios)
         - v_nom en kV, coordenadas x=lon, y=lat
@@ -36,8 +45,16 @@ Decisiones de modelado:
     TRANSFORMADORES:
         - x_pu y r_pu del PSS/E asumidos en base sbase_mva del trafo (CZ=2 tipico)
         - s_nom = sbase_mva del PSS/E
+        - tap_ratio = WINDV del devanado de 500kV (extraido en script 03)
+          Si el CSV no tiene la columna (corrida legacy) se asume 1.0 con advertencia.
         - Se omiten trafos con buses ausentes en buses_final.csv
         - Keys duplicados (3W descompuestos) se resuelven agregando sufijo _A, _B
+
+    BUSES — warm start:
+        - v_mag_pu_psse y v_ang_deg_psse del caso base PSS/E se guardan como
+          atributos adicionales en n.buses y quedan en el .nc.
+        - El script 12c los usa para inicializar los setpoints de los generadores PV
+          antes del Newton-Raphson, mejorando drasticamente la convergencia.
 
     SNAPSHOT:
         - Un solo snapshot (2024-01-01) para poder exportar el .nc
@@ -148,25 +165,101 @@ def main():
         n.add(
             "Bus",
             row['bus_name'],
-            v_nom    = float(row['baskv_kv']),
-            x        = lon,
-            y        = lat,
-            carrier  = "AC",
+            v_nom   = float(row['baskv_kv']),
+            x       = lon,
+            y       = lat,
+            carrier = "AC",
         )
         n_added_buses += 1
+
+    # Asignar perfil PSS/E directamente al DataFrame de buses
+    # (n.add no acepta atributos custom — hay que hacerlo post-loop)
+    buses_indexed = buses.set_index('bus_name')
+    n.buses['v_mag_pu_psse']  = buses_indexed['vm_pu'].reindex(n.buses.index).fillna(1.0)
+    n.buses['v_ang_deg_psse'] = buses_indexed['va_deg'].reindex(n.buses.index).fillna(0.0)
 
     print(f"    Buses agregados   : {n_added_buses}")
     if n_sin_coord:
         print(f"    ⚠ Sin coordenadas : {n_sin_coord} (agregados igual)")
 
     # ==========================================================
+    # FUSION DE ACOPLADORES DE BARRA
+    # Compensadores serie con r=0 exacto no son compensadores reales:
+    # son acopladores de barra (bus section couplers) que conectan
+    # barras internas de la misma subestacion fisica. Tienen admitancia
+    # infinita y hacen singular el Jacobiano del Newton-Raphson.
+    # Se fusionan los buses internos al bus principal de cada grupo
+    # antes de construir el modelo. Los CSVs originales no se modifican.
+    # ==========================================================
+    print(f"\n[1b] Fusionando acopladores de barra (series_compensator con r=0)...")
+
+    couplers = lines[
+        (lines['element_type'] == 'series_compensator') &
+        (lines['r_pu'] == 0.0)
+    ]
+
+    # Union-Find para agrupar buses conectados por acopladores
+    parent = {}
+
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent.get(x, x), parent.get(x, x))
+            x = parent.get(x, x)
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        # El bus de menor id_numerico queda como raiz (favorece al bus principal)
+        # Para buses 500kV vs internos, el 500kV tiene nombre mas corto/limpio
+        # pero usamos bus_id para ser deterministas
+        try:
+            if int(ra) > int(rb):
+                ra, rb = rb, ra
+        except (ValueError, TypeError):
+            pass
+        parent[rb] = ra
+
+    for _, row in couplers.iterrows():
+        union(str(row['bus_i']), str(row['bus_j']))
+
+    # Construir mapa bus_id_str -> bus_id_str del representante
+    all_bus_id_strs = set(str(bid) for bid in all_bus_ids)
+    fusion_map_ids = {b: find(b) for b in all_bus_id_strs if find(b) != b}
+
+    # Convertir a mapa bus_name -> bus_name usando id_to_name
+    fusion_map = {}
+    for child_id_str, root_id_str in fusion_map_ids.items():
+        child_name = id_to_name.get(int(child_id_str))
+        root_name  = id_to_name.get(int(root_id_str))
+        if child_name and root_name:
+            fusion_map[child_name] = root_name
+
+    print(f"    Acopladores detectados : {len(couplers)}")
+    print(f"    Buses fusionados       : {len(fusion_map)}")
+    for child, root in sorted(fusion_map.items()):
+        print(f"      {child:<20} -> {root}")
+
+    # Eliminar los buses internos del network — ya no tienen razón de existir
+    # Sus transformadores y líneas van a apuntar al bus representante
+    for child_name in fusion_map:
+        if child_name in n.buses.index:
+            n.remove("Bus", child_name)
+    print(f"    Buses eliminados del network : {len(fusion_map)}")
+
+    def resolve(bus_name):
+        """Devuelve el bus representante despues de fusión."""
+        return fusion_map.get(bus_name, bus_name)
+
+    # ==========================================================
     # AGREGAR LINEAS
     # ==========================================================
     print(f"\n[2] Agregando lineas y compensadores...")
-    n_lines       = 0
-    n_comps       = 0
-    n_skip_bus    = 0
-    n_skip_svc    = 0
+    n_lines        = 0
+    n_comps        = 0
+    n_skip_bus     = 0
+    n_skip_coupler = 0
 
     for _, row in lines.iterrows():
         bus_i_id = int(row['bus_i'])
@@ -177,13 +270,23 @@ def main():
             n_skip_bus += 1
             continue
 
-        # Omitir lineas fuera de servicio (match_status=pendiente_bus ya filtra T PEPE)
+        # Omitir lineas con bus extremo sin datos
         if row['match_status'] == 'pendiente_bus':
             n_skip_bus += 1
             continue
 
-        bus_i_name = id_to_name[bus_i_id]
-        bus_j_name = id_to_name[bus_j_id]
+        # Saltear acopladores de barra (ya resueltos por fusion)
+        if row['element_type'] == 'series_compensator' and safe_float(row['r_pu']) == 0.0:
+            n_skip_coupler += 1
+            continue
+
+        bus_i_name = resolve(id_to_name[bus_i_id])
+        bus_j_name = resolve(id_to_name[bus_j_id])
+
+        # Saltear si la fusion colapsó los dos extremos al mismo bus
+        if bus_i_name == bus_j_name:
+            n_skip_coupler += 1
+            continue
 
         # Zbase dinamico usando baskv_kv del bus_i
         vbase  = bus_vnom[bus_i_id]
@@ -212,6 +315,8 @@ def main():
 
     print(f"    Lineas agregadas       : {n_lines}")
     print(f"    Compensadores serie    : {n_comps}")
+    if n_skip_coupler:
+        print(f"    Acopladores omitidos   : {n_skip_coupler} (fusionados en [1b])")
     if n_skip_bus:
         print(f"    ⚠ Omitidas (bus ausente o pendiente_bus): {n_skip_bus}")
 
@@ -221,6 +326,13 @@ def main():
     print(f"\n[3] Agregando transformadores...")
     n_trafos     = 0
     n_skip_trafo = 0
+
+    # Verificar columna tap_ratio (requiere haber corrido script 03 actualizado)
+    if 'tap_ratio' not in trafos.columns:
+        print(f"    ⚠ Columna tap_ratio ausente en {TRAFOS_FILE}")
+        print(f"      Regenerar trafos_500kv_raw.csv corriendo el script 03 actualizado.")
+        print(f"      Se asume tap_ratio=1.0 en todos los trafos (resultado suboptimo).")
+        trafos['tap_ratio'] = 1.0
 
     # Resolver keys duplicados (trafos 3W descompuestos)
     trafo_keys_raw  = list(trafos['trafo_key'])
@@ -241,27 +353,32 @@ def main():
             print(f"    ⚠ Trafo omitido: {tkey}  ({', '.join(missing)})")
             continue
 
-        bus_i_name = id_to_name[bus_i_id]
-        bus_j_name = id_to_name[bus_j_id]
+        bus_i_name = resolve(id_to_name[bus_i_id])
+        bus_j_name = resolve(id_to_name[bus_j_id])
 
-        r_pu   = safe_float(row['r_pu'])
-        x_pu   = safe_float(row['x_pu'])
-        s_nom  = safe_float(row['sbase_mva'], default=100.0)
+        r_pu      = safe_float(row['r_pu'])
+        x_pu      = safe_float(row['x_pu'])
+        s_nom     = safe_float(row['sbase_mva'], default=100.0)
+        tap_ratio = safe_float(row.get('tap_ratio', 1.0), default=1.0)
 
         n.add(
             "Transformer",
             tkey,
-            bus0  = bus_i_name,
-            bus1  = bus_j_name,
-            r     = r_pu,
-            x     = x_pu,
-            s_nom = s_nom,
+            bus0      = bus_i_name,
+            bus1      = bus_j_name,
+            r         = r_pu,
+            x         = x_pu,
+            s_nom     = s_nom,
+            tap_ratio = tap_ratio,
         )
         n_trafos += 1
 
     print(f"    Transformadores agregados : {n_trafos}")
     if n_skip_trafo:
         print(f"    ⚠ Omitidos               : {n_skip_trafo}")
+
+    tap_off = (trafos.loc[trafos['trafo_key'].isin(trafo_keys_raw), 'tap_ratio'] != 1.0).sum()
+    print(f"    Trafos con tap != 1.0    : {tap_off}")
 
     # ==========================================================
     # RESUMEN DE LA RED
@@ -279,6 +396,10 @@ def main():
     print(f"\n  Distribucion de v_nom:")
     for vnom, grp in n.buses.groupby('v_nom'):
         print(f"    {int(vnom):>5} kV : {len(grp)} buses")
+
+    vm_range = n.buses['v_mag_pu_psse']
+    print(f"\n  Perfil PSS/E guardado en buses (warm start para 12c):")
+    print(f"    v_mag_pu_psse  rango : [{vm_range.min():.4f}, {vm_range.max():.4f}]")
 
     # ==========================================================
     # EXPORTAR

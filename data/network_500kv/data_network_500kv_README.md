@@ -22,6 +22,7 @@ Generados corriendo los scripts de `scripts/network_500kv/` en orden.
 | `generators_readypypsa.csv` | `11_add_geo_to_generators.py` | Generadores con geo + bus resueltos — candidatos directos a PyPSA |
 | `generators_manualpypsa.csv` | Manual | Pending completado manualmente con decisiones y asignaciones |
 | `generators_final.csv` | `12_build_generators_final.py` | Tabla definitiva de generadores para PyPSA |
+| `generators_2024.csv` | `13_build_generators_2024.py` | Generadores con potencia real 2024 (p_nom desde CAMMESA) |
 | `loads_mapped.csv` | `10_map_loads.py` | Tabla de lookup topológica cargas PSS/E → nodos modelo |
 | `conexiones_internacionales.md` | Manual | Interconexiones con países vecinos en el PSS/E |
 
@@ -253,6 +254,40 @@ incluirlas en `generators_final.csv`.
 Tabla definitiva de generadores para PyPSA. Une `generators_readypypsa.csv` con las
 filas de `generators_manualpypsa.csv` que tienen `nombre_geosadi` y `bus_conexion500kv`
 completos. Es el input del modelo junto con `buses_final.csv` y `lines_500kv_final.csv`.
+
+El campo `nemo` se resuelve haciendo join `nombre_geosadi` → `Nombre` en
+`centrales_electricas.csv` de GeoSADI. Para los casos donde el `nombre_geosadi` tiene
+encoding corrupto (Ñ, Á, etc.), el nemo se recupera desde los primeros 4 caracteres
+de `bus_name_origen` (PSS/E, siempre ASCII). El `nemo` es la clave para el join con
+`VALORES_2024.csv` en el script 13.
+
+---
+
+### `generators_2024.csv`
+**Fuente:** `13_build_generators_2024.py`
+
+Tabla de generadores con potencia instalada real 2024 desde CAMMESA. Reemplaza los
+valores de potencia del snapshot PSS/E por datos reales del archivo `VALORES_2024.csv`.
+Es el input de generación del modelo a partir del script 14b en adelante.
+
+| Campo | Descripción |
+|-------|-------------|
+| `gen_key` | Clave única PSS/E: `bus_id_origen-gen_id` |
+| `bus_name_origen` | Nombre del bus origen en PSS/E |
+| `nombre_geosadi` | Nombre de la central en GeoSADI |
+| `nemo` | Código CAMMESA de la central (4–6 chars). Para las unidades TG01, TG06 y TV07 de Agua del Cajón figura `CAPE` (CAPEX Autoprod.) por ser comercialmente independientes |
+| `bus_conexion500kv` | bus_id del nodo del modelo al que conecta |
+| `bus_conexion500kv_name` | Nombre del nodo del modelo |
+| `carrier` | Tipo tecnológico PyPSA |
+| `p_nom` | Potencia instalada real (MW) — percentil 95 de `POT_DISP` anual en CAMMESA, distribuido proporcionalmente al `pt_mw` PSS/E entre las unidades de la central |
+| `lat` / `lon` | Coordenadas geográficas de la central (WGS84) |
+| `n_saltos` | Saltos BFS hasta el nodo del modelo |
+| `camino` | Ruta de buses PSS/E desde origen hasta nodo del modelo |
+
+**Notas:**
+- Salto Grande (SGDE): el `p_nom` de CAMMESA se divide por 2 antes de distribuir entre las unidades argentinas (central binacional Argentina–Uruguay).
+- 19 unidades excluidas por no tener match en CAMMESA (autoproductores y centrales fuera del Mercado Eléctrico Mayorista).
+- `p_nom` total del sistema: ~27.200 MW.
 
 ---
 

@@ -25,6 +25,7 @@ Correr en orden desde WSL con el entorno `pypsa-earth-lock`.
 | `12_build_generators_final.py` | Join automático + manual → tabla definitiva para PyPSA | `generators_readypypsa.csv` + `generators_manualpypsa.csv` | `generators_final.csv` |
 | `12b_export_qgis_generators.py` | Agrega layer de centrales al GeoPackage de balance | `generators_final.csv` + `balance_gen_carga.gpkg` | Layer `centrales_electricas` en `balance_gen_carga.gpkg` |
 | `12c_test_snapshot.py` | Carga snapshot PSS/E al network PyPSA y corre power flow de validación | `network_500kv.nc` + `generators_final.csv` + `loads_mapped.csv` | (consola — sin archivo de salida) |
+| `13_build_generators_2024.py` | Construye tabla de generadores con potencia real 2024 desde CAMMESA | `generators_final.csv` + `VALORES_2024.csv` | `generators_2024.csv` |
 | `aliases_500kv.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
 
 ---
@@ -294,6 +295,39 @@ Resultados reportados en consola:
 
 No produce archivo de salida — es un script de validación. Si el power flow converge,
 la topología y el balance generación/carga del snapshot están consistentes.
+
+---
+
+### `13_build_generators_2024.py`
+Construye `generators_2024.csv` — la tabla de generadores con potencia instalada real
+2024 desde CAMMESA, reemplazando los valores del snapshot PSS/E.
+
+**Lógica de p_nom:**
+Para cada central (nemo4 = primeros 4 chars del nemo), `p_nom` = percentil 95 de
+`POT_DISP` anual en `VALORES_2024.csv`. Se usa p95 en lugar del máximo para evitar
+outliers (registros erróneos puntuales detectados en el análisis de cobertura).
+El valor se distribuye proporcionalmente al `pt_mw` del PSS/E entre las unidades
+de la central — el `pt_mw` PSS/E es válido como ponderador porque refleja la
+capacidad técnica de cada máquina, no el despacho.
+
+**Reasignación CAPE/ACAJ:**
+CAPEX Autoprod. (código CAMMESA: `CAPE`) y Agua del Cajón (`ACAJ`) son
+comercialmente independientes pero físicamente la misma central. Las unidades
+`1601-1` (TG01), `1600-6` (TG06) y `1606-1` (TV07) se reasignan a `nemo = CAPE`
+antes del join con CAMMESA.
+
+**Central binacional:**
+Salto Grande (`SGDE`): el `p_nom` de CAMMESA se divide por 2 antes de distribuir,
+ya que CAMMESA reporta la potencia total de la represa (Argentina + Uruguay).
+
+**Centrales excluidas:**
+Las 19 unidades sin match en CAMMESA por nemo4 — autoproductores y centrales
+fuera del Mercado Eléctrico Mayorista. Se listan en consola al correr el script.
+
+Parámetros configurables:
+- `P_NOM_PERCENTILE` — percentil usado para p_nom (default: 95)
+- `BINACIONAL_FACTOR` — diccionario nemo4 → factor de escala para centrales binacionales
+- `NEMO_OVERRIDE` — diccionario gen_key → nemo para reasignaciones individuales
 
 ---
 
