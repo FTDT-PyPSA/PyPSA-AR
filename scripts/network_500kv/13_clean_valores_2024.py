@@ -5,7 +5,7 @@ Produce valores_2024_clean.csv — archivo confiable que usan todos los scripts
 downstream (15, 17, 18).
 
 Input:
-    Official data/VALORES_2024.csv
+    Official data/VALORES_2024.csv (archivo externo a github)
         Archivo horario de generacion 2024 del Mercado Electrico Mayorista.
         ~8.8 millones de filas. Una fila por unidad (GRUPO) por hora.
         Separador: punto y coma. Encoding: latin-1.
