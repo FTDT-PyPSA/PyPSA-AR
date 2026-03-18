@@ -22,6 +22,11 @@ Output:
         Columna 'stat': estado del generador en el snapshot PSS/E (pico verano 25/26).
         stat=1 en servicio, stat=0 fuera de servicio en ese caso base.
 
+Reasignacion CAPE/ACAJ:
+    CAPEX (CAPE en CAMMESA) y Agua del Cajon (ACAJ) son comercialmente
+    separados pero fisicamente la misma central. Las unidades TG01, TG06
+    y TV07 pertenecen a CAPE. 
+
 Correr desde WSL:
     python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/12_build_generators_final.py
 """
@@ -48,6 +53,16 @@ COLS = [
     'match_type', 'n_saltos', 'camino',
 ]
 
+# Reasignacion de nemo por gen_key individual.
+# CAPEX (CAPE en CAMMESA) y Agua del Cajon (ACAJ) son comercialmente
+# separados pero fisicamente la misma central.
+# TG01, TG06 y TV07 pertenecen a CAPE.
+NEMO_OVERRIDE = {
+    '1601-1': 'CAPE',   # ACAJTG01 -> CAPEX
+    '1600-6': 'CAPE',   # ACAJTG06 -> CAPEX
+    '1606-1': 'CAPE',   # ACAJTV07 -> CAPEX
+}
+
 
 def main():
     print("=" * 60)
@@ -64,7 +79,6 @@ def main():
     centrales = pd.read_csv(CENTRALES_FILE, encoding='latin-1')
 
     # Diccionario nombre_geosadi -> nemo desde centrales_electricas.csv
-    # Join por nombre exacto: nombre_geosadi == Nombre
     nemo_map = centrales.drop_duplicates('Nombre').set_index('Nombre')['Nemo'].to_dict()
 
     print(f"generators_readypypsa  : {len(ready)} generadores")
@@ -88,17 +102,26 @@ def main():
     df_final = df_final.sort_values('pt_mw', ascending=False).reset_index(drop=True)
 
     # Agregar nemo via join por nombre_geosadi -> Nombre en centrales_electricas.csv
-    # Es el join correcto: nombre_geosadi fue asignado en el script 11 desde ese mismo campo
     df_final['nemo'] = df_final['nombre_geosadi'].map(nemo_map).fillna('')
 
     # Para los que quedaron sin nemo (nombre_geosadi corrupto por encoding),
-    # tomar los primeros 4 chars de bus_name_origen que viene del PSS/E (ASCII puro)
+    # tomar los primeros 4 chars de bus_name_origen
     mask_sin = df_final['nemo'] == ''
     if mask_sin.sum() > 0:
         df_final.loc[mask_sin, 'nemo'] = (
             df_final.loc[mask_sin, 'bus_name_origen'].str[:4].str.strip()
         )
-        print(f"  ℹ {mask_sin.sum()} nemos resueltos desde bus_name_origen[:4] (encoding corrupto en nombre_geosadi)")
+        print(f"  {mask_sin.sum()} nemos resueltos desde bus_name_origen[:4] (encoding corrupto en nombre_geosadi)")
+
+    # Aplicar reasignacion CAPE/ACAJ
+    n_override = 0
+    for gkey, nuevo_nemo in NEMO_OVERRIDE.items():
+        mask_ov = df_final['gen_key'] == gkey
+        if mask_ov.sum() > 0:
+            df_final.loc[mask_ov, 'nemo'] = nuevo_nemo
+            n_override += mask_ov.sum()
+    if n_override:
+        print(f"  Reasignacion CAPE/ACAJ aplicada: {n_override} unidades -> CAPE")
 
     n_con_nemo = (df_final['nemo'] != '').sum()
     n_sin_nemo = (df_final['nemo'] == '').sum()
@@ -141,8 +164,7 @@ def main():
     # ==========================================================
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_final.to_csv(OUTPUT_FILE, index=False)
-    print(f"\n✔ {OUTPUT_FILE}  ({len(df_final)} filas)")
-    print(f"\nProximo: paso 13 — cargar generacion real 2024 desde VALORES_2024.csv")
+    print(f"\n  Output: {OUTPUT_FILE}  ({len(df_final)} filas)")
 
 
 if __name__ == "__main__":

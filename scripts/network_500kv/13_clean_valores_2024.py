@@ -5,13 +5,13 @@ Produce valores_2024_clean.csv — archivo confiable que usan todos los scripts
 downstream (15, 17, 18).
 
 Input:
-    Official data/VALORES_2024.csv (archivo externo a github)
+    Official data/VALORES_2024.csv
         Archivo horario de generacion 2024 del Mercado Electrico Mayorista.
         ~8.8 millones de filas. Una fila por unidad (GRUPO) por hora.
         Separador: punto y coma. Encoding: latin-1.
 
 Output:
-    Official data/valores_2024_clean.csv (archivo externo a github)
+    Official data/valores_2024_clean.csv
         Solo filas del año 2024 (el archivo original contiene tambien datos de 2025).
         Misma estructura por fila que el input (no se eliminan filas de 2024).
         Columnas normalizadas + columna datetime + columna flag_outlier.
@@ -80,6 +80,16 @@ COLS_OUTPUT = [
 
 # Percentil para deteccion de outliers por exceso
 OUTLIER_PERCENTIL = 99.9
+
+# GRUPOs excluidos del archivo limpio.
+# YACYHIPY: lado paraguayo de Yacyreta — no forma parte del modelo argentino.
+GRUPOS_EXCLUIR = {'YACYHIPY'}
+
+# Centrales binacionales: CAMMESA reporta potencia total de la represa.
+# Se aplica el factor antes de escribir al output para quedarse solo
+# con la parte argentina.
+# SGDE (Salto Grande): Argentina comparte la central con Uruguay al 50%.
+FACTOR_BINACIONAL = {'SGDE': 0.5}
 
 
 # =============================================================================
@@ -156,6 +166,8 @@ def pasada_1_percentiles():
         n_filas += len(chunk)
 
         for grupo, grp in chunk.groupby('GRUPO'):
+            if grupo in GRUPOS_EXCLUIR:
+                continue
             if grupo not in acumulador:
                 acumulador[grupo] = {'e': [], 'p': []}
             acumulador[grupo]['e'].append(grp['ENERGIA'].values)
@@ -229,8 +241,20 @@ def pasada_2_transformar(p999_energia, p999_pot_disp):
         # --- Filtrar solo 2024 ---
         chunk = chunk[chunk['FECHA'].str.endswith('2024')].copy()
 
+        # --- Excluir GRUPOs no argentinos ---
+        chunk = chunk[~chunk['GRUPO'].isin(GRUPOS_EXCLUIR)].copy()
+
         if len(chunk) == 0:
             continue
+
+        # --- Aplicar factor binacional (ej: SGDE x0.5) ---
+        for central, factor in FACTOR_BINACIONAL.items():
+            mask_bin = chunk['Central'] == central
+            if mask_bin.sum() > 0:
+                chunk.loc[mask_bin, 'ENERGIA']       *= factor
+                chunk.loc[mask_bin, 'POT_DISP']      *= factor
+                chunk.loc[mask_bin, 'ENERG_OPERADA'] *= factor
+                chunk.loc[mask_bin, 'POT_DISP_GN']   *= factor
 
         n_filas += len(chunk)
         fechas_unicas.update(chunk['FECHA'].unique())
