@@ -5,7 +5,7 @@ Snapshot: 2024-02-01 14:00 (27.439 MW de demanda, 28.689 MW de generacion).
 
 Inputs:
     networks/network_500kv.nc
-    data/network_500kv/generators_final.csv
+    data/network_500kv/generators_2024.csv
     data/network_500kv/loads_2024.csv
     Official data/valores_2024_clean.csv  (archivo externo a GitHub)
 
@@ -54,7 +54,7 @@ import pypsa
 # =============================================================================
 
 NETWORK_FILE  = "/mnt/c/Work/pypsa-ar-base/networks/network_500kv.nc"
-GEN_FILE      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/generators_final.csv"
+GEN_FILE      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/generators_2024.csv"
 LOADS_FILE    = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/loads_2024.csv"
 VALORES_FILE  = "/mnt/c/Work/pypsa-ar-sandbox/Official data/valores_2024_clean.csv"
 
@@ -131,30 +131,28 @@ def mapear_generacion(gen, energia_por_grupo, central_por_grupo):
     gen = gen.copy()
     gen['nemo4'] = gen['nemo'].fillna('').str[:4].str.strip()
 
-    p_set_list     = []
+    # p_nom_total por nemo4 para distribucion proporcional
+    pnom_total = gen.groupby('nemo4')['p_nom'].sum().to_dict()
+
+    p_set_list      = []
     match_type_list = []
 
     for _, row in gen.iterrows():
         bus_origen = row['bus_name_origen']
         nemo4      = row['nemo4']
-        pt_mw      = row['pt_mw'] if row['pt_mw'] < 9000 else 0.0
+        p_nom      = row['p_nom']
 
         # Match exacto GRUPO
         if bus_origen in grupos_disponibles:
             valor = energia_por_grupo[bus_origen]
             match_type_list.append('directo')
 
-        # Sin match: buscar por Central (nemo4)
+        # Sin match: distribuir ENERGIA de la central proporcional a p_nom
         elif nemo4 in central_a_grupos:
             grupos_central = central_a_grupos[nemo4]
-            e_central = sum(energia_por_grupo.get(g, 0) for g in grupos_central)
-
-            unidades_central = gen[gen['nemo4'] == nemo4]
-            pt_total = unidades_central['pt_mw'].apply(
-                lambda x: x if x < 9000 else 0
-            ).sum()
-
-            valor = e_central * (pt_mw / pt_total) if pt_total > 0 else 0.0
+            e_central  = sum(energia_por_grupo.get(g, 0) for g in grupos_central)
+            pt_total   = pnom_total.get(nemo4, 0)
+            valor      = e_central * (p_nom / pt_total) if pt_total > 0 else 0.0
             match_type_list.append('distribuido')
 
         else:
