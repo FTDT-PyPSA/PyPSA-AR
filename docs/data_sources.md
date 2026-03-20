@@ -17,7 +17,6 @@ Contiene:
 
 Procesado por: `01_parse_raw_buses.py`, `02_parse_raw_lines.py`, `03_parse_raw_transformers.py`, `04_parse_raw_buses_sec.py`
 
-
 ### Fuente geográfica: GeoSADI (CAMMESA)
 
 URL: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
@@ -25,59 +24,118 @@ URL: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745
 Layers utilizados:
 - `estaciones_transformadoras.geojson` — coordenadas y nombre de estaciones por nivel de tensión
 - `lineas_alta_tension.geojson` — geometría de líneas con nombre y tensión
+- `centrales_electricas.csv` — centrales con nombre, nemo y coordenadas
 
-Procesado por: `05_match_geosadi_coords.py`, `06_match_geosadi_geometry.py`
-
+Procesado por: `05_match_geosadi_coords.py`, `06_match_geosadi_geometry.py`, `11_add_geo_to_generators.py`
 
 ### Diccionarios de matching manual
 
-`data/network_500kv/buses_PSSE_vs_geosadi.xlsx` — coordenadas curadas para los 95 buses 500 kV.
-Versionado en Git.
+`data/network_500kv/buses_PSSE_vs_geosadi.xlsx` — coordenadas curadas para los 95 buses 500 kV. Versionado en Git.
 
-`data/network_500kv/manual_line_mappings.csv` — mapeo manual line_key → geosadi_line_id.
-Versionado en Git.
+`data/network_500kv/manual_line_mappings.csv` — mapeo manual line_key → geosadi_line_id. Versionado en Git.
+
+`data/network_500kv/generators_manualpypsa.csv` — asignaciones manuales de generadores pendientes. Versionado en Git.
+
+`data/network_500kv/conflictos_psse_cammesa.csv` — resolución manual de discrepancias entre nombres PSS/E y GRUPOs CAMMESA. Versionado en Git.
 
 ### Estado
 
-✅ 95 buses 500 kV + 266 buses secundarios procesados
-✅ 122 líneas procesadas (sin_match = 0)
-✅ 301 transformadores procesados
+✅ 95 buses 500 kV + 249 buses secundarios en el network (344 totales tras fusión de acopladores)
+✅ 103 líneas activas procesadas
+✅ 300 transformadores procesados
 ✅ Topología validada (1 componente conexa, 0 buses aislados)
-✅ Check visual en QGIS
-🔲 Script 08: construir objeto PyPSA pendiente
+✅ Verificación visual en QGIS
 
 ---
 
 ## 2. Generación
 
-### Fuente: GeoSADI — centrales_electricas
+### Fuente principal: CAMMESA — VALORES_2024.csv
 
-436 centrales / 48.099 MW instalados.
+Archivo de generación horaria del Mercado Eléctrico Mayorista para el año 2024.
+Contiene ENERGIA (MWh), POT_DISP (MW), ENERG_OPERADA (MWh) y POT_DISP_GN (MW) por
+GRUPO y hora, para todas las unidades del despacho.
 
-Incluye: térmica, hidro, nuclear, eólica, solar.
+Procesado por: `13_clean_valores_2024.py` → `valores_2024_clean.csv`
 
-Estado: 🔲 pendiente.
+Transformaciones aplicadas:
+- Filtro año 2024
+- Normalización de formato datetime a DD/MM/YYYY HH:MM
+- Exclusión de YACYHIPY (lado paraguayo de Yacyretá)
+- Factor 0.5 a SGDE (Salto Grande — central binacional Argentina/Uruguay)
+- Detección de outliers por GRUPO (flag_outlier)
 
-### Fuente complementaria: CAMMESA posoperativos
+Archivo resultante: `valores_2024_clean.csv` — externo a GitHub (~580 MB).
 
-Para calibración: despacho horario real 2024 por tecnología.
+### Fuente complementaria: GeoSADI — centrales_electricas
 
-Estado: 🔲 pendiente.
+Coordenadas y nemo de 436 centrales del SADI. Usado para asignar coordenadas
+geográficas a las unidades generadoras del modelo.
+
+### Estado
+
+✅ 669 unidades generadoras en `generators_final.csv`
+✅ 626 unidades en `generators_2024.csv` con p_nom real 2024 (p95 POT_DISP)
+✅ 77 conflictos PSS/E vs CAMMESA detectados y resueltos manualmente
+✅ p_nom total del sistema: ~26.400 MW
+✅ Perfiles horarios p_max_pu 2024: `gen_profiles_2024.csv` (externo a GitHub, ~5.3M filas)
+🔲 Costos marginales por unidad: pendiente
 
 ---
 
 ## 3. Demanda
 
-### Fuente: CAMMESA
+### Fuente: CAMMESA — Dda_horaria_x_trafo_2024.csv
 
-Perfiles horarios de demanda 2024.
-Desagregación regional por nodo.
+Demanda horaria 2024 por transformador de distribución. Formato ancho: una fila por
+transformador, 8784 columnas de valores horarios en MW. Incluye metadata de cada
+transformador: bus 500 kV de conexión, región, provincia y participación en la
+demanda provincial.
 
-Estado: 🔲 pendiente.
+Procesado por: `15_build_loads_2024.py` → `loads_2024.csv`
+
+Archivo resultante: `loads_2024.csv` — versionado en Git (72 buses × 8784 horas).
+
+### Estado
+
+✅ 72 buses con demanda asignada
+✅ Pico de demanda del sistema: 27.439 MW (01/02/2024 14:00)
+✅ Promedio anual: ~15.963 MW | Mínimo: ~9.365 MW (25/12/2024 07:00)
 
 ---
 
-## 4. Renovables (VRE)
+## 4. Validación DC — snapshot pico de demanda 2024
+
+### Script: `16_snapshot_dc_pico2024.py`
+
+Flujo DC linealizado sobre el snapshot de máximo pico de demanda del año 2024.
+
+Resultados (01/02/2024 14:00):
+- Generación despachada: 26.374 MW
+- Inyección del slack (ATUCHA 2): 1.013 MW
+- Demanda total: 27.439 MW
+- Brecha explicada por importaciones de Brasil (~2.267 MW, no modeladas)
+- Línea más cargada: C.COSTA-P.BAND.-1 al 133% de su rating PSS/E (el cual se identifico en 866 mva, muy restrictivo para las condiciones de la linea)
+
+### Estado
+
+✅ Flujo DC converge
+✅ Balance generación/demanda consistente con datos CAMMESA
+✅ Congestión en corredor C.COSTA-P.BAND. coherente con la limitación de modelar solo red 500 kV
+
+---
+
+## 5. Costos marginales
+
+### Fuente: CAMMESA posoperativos
+
+Costos marginales horarios por central para el año 2024.
+
+Estado: 🔲 pendiente de obtención.
+
+---
+
+## 6. Renovables (VRE) — para etapas futuras
 
 ### Viento y solar
 
@@ -85,11 +143,15 @@ Estado: 🔲 pendiente.
 - Atlas Solar Argentina
 - Procesamiento con atlite para factores de capacidad horarios
 
+En la versión actual, los perfiles de solar y eólica se construyen desde ENERGIA
+real de CAMMESA 2024 (script 17). Los perfiles meteorológicos de ERA5/atlite se
+incorporarán en etapas futuras para escenarios prospectivos.
+
 Estado: 🔲 no iniciado.
 
 ---
 
-## 5. Precios de combustibles y emisiones
+## 7. Precios de combustibles y emisiones — para etapas futuras
 
 ### Fuentes
 
@@ -105,6 +167,6 @@ Estado: 🔲 a estructurar en fase de calibración.
 ## Principios de gestión de datos
 
 - Toda fuente debe tener referencia y fecha de extracción.
-- Archivos crudos pesados (.raw, .geojson, .nc) se almacenan en Google Drive, fuera de Git.
-- Solo se versionan: scripts, CSVs procesados, diccionarios de matching y documentación.
+- Archivos crudos pesados (.raw, .geojson, .nc, .csv >50 MB) se almacenan fuera de Git.
+- Solo se versionan: scripts, CSVs procesados livianos, diccionarios de matching y documentación.
 - Todas las transformaciones son reproducibles desde los archivos fuente.

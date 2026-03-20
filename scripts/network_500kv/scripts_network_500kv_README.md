@@ -25,7 +25,12 @@ Correr en orden desde WSL con el entorno `pypsa-earth-lock`.
 | `12_build_generators_final.py` | Join automático + manual → tabla definitiva para PyPSA | `generators_readypypsa.csv` + `generators_manualpypsa.csv` | `generators_final.csv` |
 | `12b_export_qgis_generators.py` | Agrega layer de centrales al GeoPackage de balance | `generators_final.csv` + `balance_gen_carga.gpkg` | Layer `centrales_electricas` en `balance_gen_carga.gpkg` |
 | `12c_test_snapshot.py` | Carga snapshot PSS/E al network PyPSA y corre power flow de validación | `network_500kv.nc` + `generators_final.csv` + `loads_mapped.csv` | (consola — sin archivo de salida) |
-| `13_build_generators_2024.py` | Construye tabla de generadores con potencia real 2024 desde CAMMESA | `generators_final.csv` + `VALORES_2024.csv` | `generators_2024.csv` |
+| `13_clean_valores_2024.py` | Limpieza y normalización de VALORES_2024.csv | `VALORES_2024.csv` (externo) | `valores_2024_clean.csv` (externo) |
+| `14_detectar_conflictos_generadores.py` | Detecta discrepancias entre nombres de unidades PSS/E y GRUPOs CAMMESA | `generators_final.csv` + `valores_2024_clean.csv` (externo) | `conflictos_psse_cammesa.csv` |
+| `14b_build_generators_2024.py` | Construye tabla de generadores con potencia real 2024 desde CAMMESA | `generators_final.csv` + `conflictos_psse_cammesa.csv` + `valores_2024_clean.csv` (externo) | `generators_2024.csv` |
+| `15_build_loads_2024.py` | Construye demanda horaria 2024 por bus 500 kV en formato largo | `Dda_horaria_x_trafo_2024.csv` (externo) + `buses_final.csv` + `lines_500kv_final.csv` | `loads_2024.csv` |
+| `16_snapshot_dc_pico2024.py` | Flujo DC linealizado en el snapshot de máximo pico de demanda 2024 | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `valores_2024_clean.csv` (externo) | (consola — sin archivo de salida) |
+| `17_build_gen_profiles_2024.py` | Construye perfiles horarios de disponibilidad (p_max_pu) para todas las unidades generadoras | `generators_2024.csv` + `valores_2024_clean.csv` (externo) | `gen_profiles_2024.csv` (externo) |
 | `aliases_500kv.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
 
 ---
@@ -121,10 +126,16 @@ El `.gpkg` se guarda en `data/GIS_psse_geosadi_pypsaearth/red_500kv_qgis.gpkg`.
 
 ### `08_build_pypsa_network.py`
 Construye el objeto `pypsa.Network` con la red 500 kV y lo exporta a `.nc`.
+
 Decisiones de modelado:
-- Impedancias del PSS/E pasadas directamente en pu (Sbase=100 MVA)
+- Impedancias del PSS/E en pu (Sbase=100 MVA confirmado en encabezado del raw)
+- Conversión a unidades físicas usando Zbase dinámico por línea: Z_base = baskv² / S_base
 - Compensadores serie modelados como `Line` con x negativo
 - Transformadores de 3 devanados ya descompuestos en 2W desde el script 03
+- Fusión de acopladores de barra (series_compensator con r=0 exacto): se detectan
+  automáticamente y se fusionan sus buses al representante del grupo (menor bus_id)
+  antes de agregar líneas y trafos. Los CSVs originales no se modifican.
+- Perfil PSS/E (v_mag_pu, v_ang_deg) guardado como atributos en n.buses para warm start
 - Output en `networks/network_500kv.nc` (no versionado en git)
 
 ---
@@ -138,23 +149,16 @@ topológicamente, usando BFS sobre `BRANCH DATA` + `TRANSFORMER DATA`.
 Se extrae del campo Owner 1 (O1) de cada generador, cruzado contra `OWNER DATA`.
 Los owner IDs conocidos se mapean a carriers PyPSA estándar (ocgt, steam, hydro,
 diesel, ccgt, nuclear, wind, solar, biogas, biomass, battery).
-Si el carrier resuelto no corresponde a generación (DEMANDA, SS.AA., TRANSPORTE,
-etc.), se intenta inferir desde las posiciones [4:6] del bus_name:
+Si el carrier resuelto no corresponde a generación, se intenta inferir desde las
+posiciones [4:6] del bus_name:
 - TG → ocgt, TV → steam, HI → hydro, DI → diesel, CC → ccgt
 - FV → solar, EO → wind, BG → biogas, BM → biomass, HB → pumped_hydro
 - Posiciones [4:8] = NUCL → nuclear
-
-Si tampoco puede resolverse por nombre, el generador se descarta. Esto elimina
-equivalentes de red y nodos de demanda que aparecen incorrectamente como generadores
-en el PSS/E.
 
 **Categorías de resultado en `match_type`:**
 - `directo` — el generador ya está en un bus del modelo
 - `bfs` — alcanzó un nodo del modelo en N saltos (típico: 1–3)
 - `sin_conexion` — la subred del PSS/E no tiene continuidad con el backbone
-
-Output:
-- `generators_mapped.csv` — tabla completa (una fila por generador)
 
 ---
 
@@ -163,20 +167,11 @@ Parsea la sección `LOAD DATA` del PSS/E y mapea cada carga al nodo del modelo
 usando la misma lógica BFS que `09_map_generators.py`.
 
 Se usa únicamente el campo `PL` (potencia activa constante). Los campos `IP` e `YP`
-son cero en todo el raw de CAMMESA, por lo que PL = carga total del nodo.
+son cero en todo el raw de CAMMESA.
 
-Categorías de resultado en campo `match_type`:
-- `directo` — la carga está directamente en un nodo del modelo
-- `bfs` — alcanzó un nodo del modelo en N saltos
-- `sin_conexion` — subred sin continuidad con el backbone
-
-Nota sobre el área metropolitana GBA: ~3.720 MW de carga aparecen como `sin_conexion`
-porque la red de 132 kV de CABA/conurbano no tiene los ramales de conexión hacia las
-subestaciones de frontera (ABASTO, EZEIZA, RODRIGUEZ) modelados en el PSS/E.
-Esta carga queda agregada en esas tres subestaciones de frontera.
-
-Output:
-- `loads_mapped.csv` — tabla completa de lookup topológica (1.215 cargas)
+Nota: ~3.720 MW de carga aparecen como `sin_conexion` porque la red de 132 kV de
+CABA/conurbano no tiene los ramales de conexión hacia las subestaciones de frontera
+modelados en el PSS/E. Esta carga queda agregada en esas tres subestaciones de frontera.
 
 ---
 
@@ -184,92 +179,36 @@ Output:
 Calcula el balance generación/carga por nodo del modelo y exporta a GeoPackage
 para visualización en QGIS como mapa de burbujas.
 
-Lee la columna `bus_conexion500kv` de `generators_mapped.csv` para agregar generación
-por nodo. Las cargas usan la columna `bus_destino` de `loads_mapped.csv`.
-
 Layer exportado: `balance_por_bus` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
-
-Atributos del layer:
-- `pg_mw` — generación total mapeada al nodo (MW)
-- `pl_mw` — carga total mapeada al nodo (MW)
-- `balance_mw` — pg_mw − pl_mw (positivo = nodo generador, negativo = nodo consumidor)
-- `n_generadores` / `n_cargas` — cantidad de unidades mapeadas
-
-Simbología sugerida en QGIS (expresión para tamaño de burbuja):
-```
-sqrt(abs("balance_mw")) / 1.5
-```
-Verde = balance positivo (nodo generador). Rojo = balance negativo (nodo consumidor).
 
 ---
 
 ### `11_add_geo_to_generators.py`
 Extiende `generators_mapped.csv` con coordenadas geográficas de GeoSADI.
 
-**Matching geográfico:**
-Se comparan los primeros 4 caracteres del `bus_name_origen` (PSS/E) contra los
-primeros 4 caracteres del campo `Nemo` de `centrales_electricas.csv` (GeoSADI).
-Si hay múltiples candidatos, se desambigua por tipo tecnológico. Para casos con
-ambigüedad no resoluble automáticamente se usa el diccionario `NEMO_PREFERIDO`
-(ej: Salto Grande, representación argentina vs. uruguaya).
+El matching geográfico se hace por los primeros 4 caracteres del `bus_name_origen`
+(PSS/E) contra el campo `Nemo` de `centrales_electricas.csv` (GeoSADI).
 
-Resultados posibles en `geo_match`:
-- `exacto` — central GeoSADI identificada sin ambigüedad
-- `sin_match` — ningún candidato en GeoSADI
-- `a_revisar` — múltiples candidatos no resolubles automáticamente
-
-**Overrides de carrier:**
-- Tipo GeoSADI `HB` → carrier = `pumped_hydro` (único caso: Río Grande, 750 MW)
-- Tipo GeoSADI `VG` → se acepta si carrier PSS/E ∈ {ocgt, steam, ccgt}; si no → `VG_revisar`
-
-**Criterio de separación de outputs:**
-- `generators_readypypsa.csv` — tiene `geo_match='exacto'`, `bus_conexion500kv` resuelto
-  y carrier válido. Son los candidatos directos a entrar a PyPSA una vez se incorpore
-  la generación real 2024. El join con esa data se hace por `nombre_geosadi` → `bus_conexion500kv`.
-- `generators_pendingmanualpypsa.csv` — le falta `nombre_geosadi`, `bus_conexion500kv`,
-  o ambos. Una fila por generador. Columna `falta` indica qué falta (`geo`/`bus`/`ambos`).
-  Columna `COMENTARIOS` vacía para registrar la decisión tomada (ej: `red interna ALUAR,
-  no va a PyPSA`). **No se versiona en git** — se regenera en cada corrida.
-
-Una vez completado el pending manualmente se guarda como `generators_manualpypsa.csv`
-(ese sí se versiona). El script 12 hace el join final.
-
-Parámetros configurables:
-- `NEMO_PREFERIDO` — diccionario bus_name_origen → Nemo GeoSADI para casos especiales
-- `VG_CARRIERS_VALIDOS` — carriers aceptables para centrales de tipo VG en GeoSADI
+Outputs:
+- `generators_readypypsa.csv` — geo_match='exacto', bus_conexion500kv resuelto, carrier válido
+- `generators_pendingmanualpypsa.csv` — requieren revisión manual (no se versiona en git)
 
 ---
 
 ### `12_build_generators_final.py`
 Une `generators_readypypsa.csv` con las filas de `generators_manualpypsa.csv` que
-tienen ambos campos completos (`nombre_geosadi` y `bus_conexion500kv`) para producir
-`generators_final.csv` — la tabla definitiva de generadores que entra a PyPSA.
+tienen ambos campos completos para producir `generators_final.csv`.
 
-El join con la data real de generación 2024 (CAMMESA) se hace por `nombre_geosadi`
-→ `bus_conexion500kv`. Los MW del PSS/E (`pg_mw`, `pt_mw`) son solo referencia y
-no se cargan al modelo.
+El campo `nemo` se resuelve haciendo join `nombre_geosadi` → `Nombre` en
+`centrales_electricas.csv` de GeoSADI.
+
+Reasignación CAPE/ACAJ: las unidades TG01, TG06 y TV07 de Agua del Cajón se
+reasignan a `nemo = CAPE` (CAPEX Autoprod.) directamente en este script.
 
 ---
 
 ### `12b_export_qgis_generators.py`
-Agrega un layer de centrales eléctricas al GeoPackage `balance_gen_carga.gpkg` generado
-por el script `10b`. Requiere que ese `.gpkg` ya exista.
-
-Layer exportado: `centrales_electricas` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
-
-Atributos del layer:
-- `gen_key` — clave única PSS/E
-- `bus_name_origen` — nombre del bus origen en PSS/E
-- `nombre_geosadi` — nombre de la central en GeoSADI
-- `bus_conexion500kv_name` — nodo del modelo al que conecta
-- `carrier` — tipo tecnológico
-- `pg_mw` — despacho en snapshot PSS/E (MW)
-- `pt_mw` — potencia instalada (MW)
-- `stat` — estado en snapshot PSS/E (1=en servicio)
-- `match_type` — cómo se resolvió la conexión al modelo
-
-Se excluyen generadores con `pt_mw >= 9000` (equivalentes ficticios del PSS/E)
-y generadores sin coordenadas geográficas.
+Agrega un layer de centrales eléctricas al GeoPackage `balance_gen_carga.gpkg`.
 
 ---
 
@@ -277,57 +216,138 @@ y generadores sin coordenadas geográficas.
 Carga los generadores y cargas del snapshot PSS/E al objeto PyPSA Network y corre
 un power flow Newton-Raphson para validar la topología y el balance de la red.
 
-Antes del power flow detecta y elimina subredes aisladas (buses desconectados de la
-red principal, típicamente remanentes de `match_status='pendiente_bus'`).
-
 Slack bus: `ATUCHA 2_21kV` (bus 2620, central nuclear, 21 kV).
 
-Pasos de ejecución:
-1. Detección y eliminación de subredes aisladas
-2. Carga de generadores activos (`stat=1`, `pt_mw < 9000`) con sus despachos del snapshot
-3. Carga de cargas activas (`stat=1`, `pl_mw > 0`)
-4. Power flow Newton-Raphson
-
-Resultados reportados en consola:
-- Tensiones nodales (mín / máx / buses fuera de [0.90, 1.10] pu)
-- Buses con tensión crítica (si los hay)
-- Carga de líneas con rating definido y líneas sobrecargadas (>100%)
-
-No produce archivo de salida — es un script de validación. Si el power flow converge,
-la topología y el balance generación/carga del snapshot están consistentes.
+No produce archivo de salida — es un script de validación.
 
 ---
 
-### `13_build_generators_2024.py`
-Construye `generators_2024.csv` — la tabla de generadores con potencia instalada real
-2024 desde CAMMESA, reemplazando los valores del snapshot PSS/E.
+### `13_clean_valores_2024.py`
+Limpieza y normalización de `VALORES_2024.csv` — archivo horario de generación
+del Mercado Eléctrico Mayorista provisto por CAMMESA.
+
+Transformaciones aplicadas:
+- Lectura en chunks (500.000 filas) — el archivo supera los 8 millones de filas e incluye datos hasta 2025
+- Normalización de formatos de fecha a `DD/MM/YYYY`
+- Filtro: solo filas del año 2024
+- Columna `datetime` construida como fecha + (HORA-1) horas (convencion CAMMESA: HORA=1 → 00:00)
+- Exclusión de `YACYHIPY` (lado paraguayo de Yacyretá — fuera del modelo argentino)
+- Factor 0.5 aplicado a SGDE (Salto Grande — central binacional Argentina/Uruguay)
+- Detección de outliers por GRUPO: flag_outlier=True si ENERGIA<0, POT_DISP<0, o
+  si supera el percentil 99.9 anual del GRUPO
+
+Output: `valores_2024_clean.csv` — externo a GitHub por tamaño (~580 MB).
+
+---
+
+### `14_detectar_conflictos_generadores.py`
+Detecta discrepancias entre los nombres de unidades del modelo (PSS/E) y los GRUPOs
+de CAMMESA en `valores_2024_clean.csv`.
+
+Un conflicto existe cuando una unidad no tiene match directo en CAMMESA
+(`bus_name_origen` no es un GRUPO válido) Y la central a la que pertenece tiene más
+de un GRUPO en CAMMESA — en ese caso no es posible determinar automáticamente qué
+GRUPO corresponde a esa unidad.
+
+Genera `conflictos_psse_cammesa.csv` para completar manualmente. Si el archivo ya
+existe, preserva las resoluciones completadas y solo actualiza las filas nuevas.
+
+Columnas a completar manualmente:
+- `bus_name_origen_correcto` — GRUPO de CAMMESA que corresponde a esta unidad según el unifilar
+- `revisado` — `si` si la fila fue revisada y no tiene match posible (va al nemo4)
+- `excluir` — `si` si la unidad debe excluirse del modelo (no entra ni por nemo4)
+- `comentario` — observaciones del unifilar
+
+Una vez completado el CSV, correr el script 14b.
+
+---
+
+### `14b_build_generators_2024.py`
+Construye `generators_2024.csv` con `p_nom` calculado desde datos reales de CAMMESA 2024.
+Requiere que `conflictos_psse_cammesa.csv` esté completado (generado por script 14).
+
+Si hay conflictos pendientes (sin `excluir`, `revisado` ni `bus_name_origen_correcto`),
+el script avisa y termina sin generar el output.
 
 **Lógica de p_nom:**
-Para cada central (nemo4 = primeros 4 chars del nemo), `p_nom` = percentil 95 de
-`POT_DISP` anual en `VALORES_2024.csv`. Se usa p95 en lugar del máximo para evitar
-outliers (registros erróneos puntuales detectados en el análisis de cobertura).
-El valor se distribuye proporcionalmente al `pt_mw` del PSS/E entre las unidades
-de la central — el `pt_mw` PSS/E es válido como ponderador porque refleja la
-capacidad técnica de cada máquina, no el despacho.
+Para cada central (nemo4), `p_nom` = percentil 95 de `POT_DISP` anual en
+`valores_2024_clean.csv`. El valor se distribuye proporcionalmente al `pt_mw` del
+PSS/E entre las unidades de la central.
 
-**Reasignación CAPE/ACAJ:**
-CAPEX Autoprod. (código CAMMESA: `CAPE`) y Agua del Cajón (`ACAJ`) son
-comercialmente independientes pero físicamente la misma central. Las unidades
-`1601-1` (TG01), `1600-6` (TG06) y `1606-1` (TV07) se reasignan a `nemo = CAPE`
-antes del join con CAMMESA.
+**Resolución de conflictos:**
+- `excluir = si` → unidad excluida del modelo
+- `bus_name_origen_correcto` completado → reemplaza `bus_name_origen` para el match con CAMMESA
+- `revisado = si` sin match → va al nemo4 normalmente
 
 **Central binacional:**
-Salto Grande (`SGDE`): el `p_nom` de CAMMESA se divide por 2 antes de distribuir,
-ya que CAMMESA reporta la potencia total de la represa (Argentina + Uruguay).
-
-**Centrales excluidas:**
-Las 19 unidades sin match en CAMMESA por nemo4 — autoproductores y centrales
-fuera del Mercado Eléctrico Mayorista. Se listan en consola al correr el script.
+Salto Grande (SGDE): `p_nom` × 0.5 antes de distribuir (Argentina/Uruguay).
 
 Parámetros configurables:
 - `P_NOM_PERCENTILE` — percentil usado para p_nom (default: 95)
-- `BINACIONAL_FACTOR` — diccionario nemo4 → factor de escala para centrales binacionales
-- `NEMO_OVERRIDE` — diccionario gen_key → nemo para reasignaciones individuales
+- `BINACIONAL_FACTOR` — diccionario nemo4 → factor para centrales binacionales
+
+---
+
+### `15_build_loads_2024.py`
+Construye la tabla de demanda horaria 2024 por bus 500 kV en formato largo.
+
+Input principal: `Dda_horaria_x_trafo_2024.csv` — archivo de demanda horaria por
+transformador confeccionado por equipo de trabajo. Formato ancho: una fila por trafo, 8784 columnas
+de valores horarios en MW. Encabezado multi-nivel de 4 filas.
+
+Fusión de acopladores de barra: replica la lógica Union-Find del script 08 usando
+`lines_500kv_final.csv` para redirigir la demanda de buses fusionados al bus
+representante que existe en el network. Garantiza que los `bus_name` del output
+coincidan con el índice de buses de `network_500kv.nc`.
+
+Output: `loads_2024.csv` — formato largo con columnas `bus_id`, `bus_name`,
+`datetime` (DD/MM/YYYY HH:MM), `p_mw`. 72 buses × 8784 horas.
+
+---
+
+### `16_snapshot_dc_pico2024.py`
+Flujo DC linealizado sobre el snapshot de máximo pico de demanda 2024.
+Snapshot: 01/02/2024 14:00 — 27.439 MW de demanda, 28.590 MW de generación CAMMESA.
+
+Genera demanda desde `loads_2024.csv` y generación desde `valores_2024_clean.csv`,
+aplicando el mismo matching que el script 14b: match directo por `bus_name_origen` o
+distribución proporcional a `p_nom` por nemo4.
+
+Slack bus: `ATUCHA 2_21kV` (bus 2620, central nuclear, 21 kV).
+
+Reporte en consola:
+- Balance: generación despachada, inyección del slack, demanda total
+- Mix de generación por tecnología (térmica agrupada: steam + ocgt + ccgt + diesel)
+- 10 líneas más cargadas (flujo / capacidad %)
+- Ángulos nodales extremos (indicador de estrés de red)
+- Top 3 fuentes no representadas en el modelo (solo si slack > 0)
+
+No produce archivo de salida — es un script de validación.
+
+---
+
+### `17_build_gen_profiles_2024.py`
+Construye los perfiles horarios de disponibilidad (`p_max_pu`) para todas las unidades
+generadoras del modelo, para las 8784 horas de 2024.
+
+**Lógica de p_max_pu:**
+- Solar, eólica, biogas, biomass: `p_max_pu = ENERGIA / p_nom`
+  Se usa ENERGIA porque se asume que en 2024 se tomaba el máximo disponible del recurso.
+- Resto de tecnologías (térmica, hidro, nuclear, pumped_hydro, diesel):
+  `p_max_pu = POT_DISP / p_nom`
+  POT_DISP refleja la capacidad disponible real hora a hora, incorporando paradas
+  programadas, mantenimientos e indisponibilidades.
+- En ambos casos el resultado se clipea entre 0 y 1.
+
+**Matching GRUPO → unidad del modelo:**
+Mismo criterio que el script 14b: match directo por `bus_name_origen`, o distribución
+proporcional a `p_nom` por nemo4 cuando el GRUPO de CAMMESA representa la central entera.
+La distribución se vectoriza con merge de pandas — no itera fila a fila.
+
+Procesamiento en chunks (500.000 filas) para no exceder RAM.
+
+Output: `gen_profiles_2024.csv` — externo a GitHub por tamaño (~5.3M filas).
+Columnas: `gen_key`, `bus_conexion500kv_name`, `carrier`, `datetime`, `p_max_pu`.
 
 ---
 

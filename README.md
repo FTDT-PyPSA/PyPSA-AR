@@ -2,7 +2,7 @@
 
 Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
 
-**Estado actual:** Pipeline 500 kV completo — scripts 01→12c finalizados, validación DC con snapshot PSS/E exitosa.
+**Estado actual:** Pipeline 500 kV completo — scripts 01→17 finalizados. Red construida, generación y demanda horaria 2024 incorporadas, validación DC con snapshot de pico de demanda exitosa.
 **Fecha límite:** 30/04/2026
 
 ---
@@ -65,7 +65,8 @@ which python
 ### Correr el pipeline 500 kV
 
 Los scripts se ejecutan desde WSL en orden. Reemplazá `<ruta-al-repo>` con la ruta local al repo
-(ej: `/mnt/c/Work/pypsa-ar-base`):
+(ej: `/mnt/c/Work/pypsa-ar-base`) y `<ruta-oficial-data>` con la ruta al directorio de datos externos
+(ej: `/mnt/c/Work/pypsa-ar-sandbox/Official data`):
 
 ```bash
 # Construcción de la red 500 kV
@@ -84,14 +85,27 @@ python <ruta-al-repo>/scripts/network_500kv/09_map_generators.py
 python <ruta-al-repo>/scripts/network_500kv/10_map_loads.py
 python <ruta-al-repo>/scripts/network_500kv/10b_visualize_qgis.py
 python <ruta-al-repo>/scripts/network_500kv/11_add_geo_to_generators.py
-# → completar generators_pendingmanualpypsa.csv (output de script 11)  antes de continuar o usar generators_manualpypsa.csv de la carpeta del repo \data\network_500kv (Archivo completado manualmente por Juan para modelo actual)
+# → completar generators_pendingmanualpypsa.csv antes de continuar,
+#   o usar generators_manualpypsa.csv ya versionado en data/network_500kv/
 python <ruta-al-repo>/scripts/network_500kv/12_build_generators_final.py
 python <ruta-al-repo>/scripts/network_500kv/12b_export_qgis_generators.py
-python <ruta-al-repo>/scripts/network_500kv/12c_test_snapshot.py  # validación DC
+python <ruta-al-repo>/scripts/network_500kv/12c_test_snapshot.py  # validación power flow PSS/E
+
+# Datos reales 2024 — requieren archivos externos (no versionados en git)
+python <ruta-al-repo>/scripts/network_500kv/13_clean_valores_2024.py
+python <ruta-al-repo>/scripts/network_500kv/14_detectar_conflictos_generadores.py
+# → completar conflictos_psse_cammesa.csv antes de continuar
+python <ruta-al-repo>/scripts/network_500kv/14b_build_generators_2024.py
+python <ruta-al-repo>/scripts/network_500kv/15_build_loads_2024.py
+python <ruta-al-repo>/scripts/network_500kv/16_snapshot_dc_pico2024.py  # validación DC pico demanda
+python <ruta-al-repo>/scripts/network_500kv/17_build_gen_profiles_2024.py
 ```
 
 > **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI, CAMMESA) están hardcodeadas en la sección
-> `CONFIGURACION` al inicio de cada script. Si tu estructura de carpetas es distinta, actualizalas antes de correr.
+> `CONFIGURACION` al inicio de cada script. Si la estructura de carpetas es distinta, actualizarlas antes de correr.
+
+> **Archivos externos a GitHub:** `VALORES_2024.csv`, `valores_2024_clean.csv`, `Dda_horaria_x_trafo_2024.csv`
+> y `gen_profiles_2024.csv` no están versionados por tamaño. Ver `docs/data_sources.md` para su origen.
 
 ---
 
