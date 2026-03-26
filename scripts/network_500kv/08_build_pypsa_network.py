@@ -59,6 +59,14 @@ Decisiones de modelado:
     SNAPSHOT:
         - Un solo snapshot (2024-01-01) para poder exportar el .nc
         - Sin perfiles de carga/generacion en esta etapa
+
+    INTERCONEXION INTERNACIONAL (opcional):
+        Controlado por la constante INCLUIR_INTERCONEXION_BRASIL.
+        Si True, agrega al network:
+        - Bus GARABI (500 kV, PSS/E bus 5010 GARACCA1, lado brasileno)
+        - Bus BRASIL (ficticio, fuente de energia para el Link)
+        - Linea RINCON-GARABI con impedancias reales del PSS/E
+        - Link importacion_brasil en GARABI: p_nom=2200 MW, marginal_cost=110 USD/MWh
 """
 
 import os
@@ -81,6 +89,26 @@ OUTPUT_FILE   = os.path.join(OUTPUT_DIR, "network_500kv.nc")
 
 # Base del sistema PSS/E — confirmado en encabezado del .raw (linea 2, campo SBASE)
 S_BASE_MVA = 100.0
+
+# Interconexion internacional Argentina-Brasil
+# Si True: agrega bus GARABI, bus BRASIL, linea RINCON-GARABI
+# y Link de importacion en GARABI.
+INCLUIR_INTERCONEXION_BRASIL = True
+
+# Datos de la linea Rincon Santa Maria (PSS/E bus 5002) - Garabi (PSS/E bus 5010 GARACCA1)
+# Impedancias en pu (Sbase=100 MVA), convertidas a unidades fisicas con Zbase=500²/100=2500 Ohm
+_ZBASE_500 = (500.0 ** 2) / S_BASE_MVA
+INTERCONEXION_BRASIL = {
+    'r_linea'       : 1.24e-3 * _ZBASE_500,
+    'x_linea'       : 1.493e-2 * _ZBASE_500,
+    'b_linea'       : 1.38425 / _ZBASE_500,
+    's_nom_linea'   : 1299.0,
+    'len_km'        : 128.65,
+    'p_nom_link'    : 2200.0,
+    'marginal_cost' : 110.0,
+    'lat_garabi'    : -27.9,
+    'lon_garabi'    : -55.3,
+}
 
 
 # =============================================================================
@@ -395,11 +423,48 @@ def main():
     # Distribucion de tensiones en buses
     print(f"\n  Distribucion de v_nom:")
     for vnom, grp in n.buses.groupby('v_nom'):
-        print(f"    {int(vnom):>5} kV : {len(grp)} buses")
+        print(f"    {vnom:>7.1f} kV : {len(grp)} buses")
 
     vm_range = n.buses['v_mag_pu_psse']
     print(f"\n  Perfil PSS/E guardado en buses (warm start para 12c):")
     print(f"    v_mag_pu_psse  rango : [{vm_range.min():.4f}, {vm_range.max():.4f}]")
+
+    # ==========================================================
+    # INTERCONEXION INTERNACIONAL (opcional)
+    # ==========================================================
+    if INCLUIR_INTERCONEXION_BRASIL:
+        print(f"\n[OPC] Agregando interconexion Argentina-Brasil ...")
+
+        n.add("Bus", "GARABI",
+              v_nom=500.0, carrier="AC",
+              x=INTERCONEXION_BRASIL['lon_garabi'],
+              y=INTERCONEXION_BRASIL['lat_garabi'])
+
+        n.add("Bus", "BRASIL",
+              v_nom=500.0, carrier="AC",
+              x=INTERCONEXION_BRASIL['lon_garabi'] - 0.1,
+              y=INTERCONEXION_BRASIL['lat_garabi'] + 0.1)
+
+        n.add("Line", "RINCON-GARABI-1",
+              bus0   = "RINCON",
+              bus1   = "GARABI",
+              r      = INTERCONEXION_BRASIL['r_linea'],
+              x      = INTERCONEXION_BRASIL['x_linea'],
+              b      = INTERCONEXION_BRASIL['b_linea'],
+              s_nom  = INTERCONEXION_BRASIL['s_nom_linea'],
+              length = INTERCONEXION_BRASIL['len_km'],
+              carrier = "AC")
+
+        n.add("Link", "importacion_brasil",
+              bus0          = "BRASIL",
+              bus1          = "GARABI",
+              p_nom         = INTERCONEXION_BRASIL['p_nom_link'],
+              marginal_cost = INTERCONEXION_BRASIL['marginal_cost'],
+              carrier       = "import_brasil")
+
+        print(f"    Bus GARABI agregado (PSS/E bus 5010 GARACCA1)")
+        print(f"    Linea RINCON-GARABI-1 agregada (s_nom={INTERCONEXION_BRASIL['s_nom_linea']} MVA)")
+        print(f"    Link importacion_brasil agregado (p_nom={INTERCONEXION_BRASIL['p_nom_link']} MW, cost={INTERCONEXION_BRASIL['marginal_cost']} USD/MWh)")
 
     # ==========================================================
     # EXPORTAR
@@ -408,10 +473,6 @@ def main():
     n.export_to_netcdf(OUTPUT_FILE)
 
     print(f"\n✔ {OUTPUT_FILE}")
-    print(f"\nPara verificar en Python:")
-    print(f"    import pypsa")
-    print(f"    n = pypsa.Network('{OUTPUT_FILE}')")
-    print(f"    print(n)")
 
 
 if __name__ == "__main__":
