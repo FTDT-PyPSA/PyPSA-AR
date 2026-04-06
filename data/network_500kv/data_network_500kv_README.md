@@ -26,6 +26,8 @@ Generados corriendo los scripts de `scripts/network_500kv/` en orden.
 | `generators_2024.csv` | `14b_build_generators_2024.py` | Generadores con potencia real 2024 (p_nom desde CAMMESA) |
 | `loads_mapped.csv` | `10_map_loads.py` | Tabla de lookup topológica cargas PSS/E → nodos modelo |
 | `loads_2024.csv` | `15_build_loads_2024.py` | Demanda horaria 2024 por bus 500 kV en formato largo |
+| `18_costos_marginales_diagnostico.csv` | `18_diagnostico_costos_marginales.py` | Auditoría de cobertura de costos marginales — completar columna `CVP_manual` antes de correr 18B |
+| `costos_marginales_2024.csv` | `18B_build_costos_marginales_2024.py` | Costo marginal fijo anual por unidad generadora (USD/MWh) |
 | `conexiones_internacionales.md` | Manual | Interconexiones con países vecinos en el PSS/E |
 
 **Archivos externos a GitHub** (tamaño o datos sensibles):
@@ -35,12 +37,14 @@ Generados corriendo los scripts de `scripts/network_500kv/` en orden.
 | `valores_2024_clean.csv` | `13_clean_valores_2024.py` | Generación horaria 2024 limpia y normalizada (CAMMESA) |
 | `gen_profiles_2024.csv` | `17_build_gen_profiles_2024.py` | Perfiles horarios de disponibilidad (p_max_pu) por unidad generadora |
 
-> Los archivos GeoPackage (`.gpkg`) se guardan en `data/GIS_psse_geosadi_pypsaearth/`.
+> Los archivos GeoPackage de la red base (`.gpkg`) se guardan en `data/GIS_psse_geosadi_pypsaearth/`.
+
+> Los archivos de clustering se guardan en `data/network_500kv/clusters/` — ver sección correspondiente.
 
 > `generators_pendingmanualpypsa.csv` se genera en cada corrida del script 11 pero
 > **no se versiona en git** — es un archivo de trabajo que se regenera automáticamente.
 
-> `network_500kv.nc` se guarda en `networks/` y **no se versiona en git**.
+> `network_500kv.nc` y `results_2024_*.nc` se guardan en `networks/` y **no se versionan en git**.
 
 ---
 
@@ -212,8 +216,6 @@ Cajón figuran con `nemo = CAPE` (CAPEX Autoprod.) por reasignación aplicada en
 **Fuente:** `14_detectar_conflictos_generadores.py` + completado manualmente
 
 Discrepancias entre los nombres de unidades del modelo (PSS/E) y los GRUPOs de CAMMESA.
-Un conflicto existe cuando `bus_name_origen` no es un GRUPO válido en CAMMESA Y la
-central tiene más de un GRUPO en CAMMESA.
 
 | Campo | Descripción |
 |-------|-------------|
@@ -246,14 +248,14 @@ de generación del modelo a partir del script 14b en adelante.
 | `nemo` | Código CAMMESA de la central |
 | `bus_conexion500kv` / `bus_conexion500kv_name` | Nodo del modelo al que conecta |
 | `carrier` | Tipo tecnológico PyPSA |
-| `p_nom` | Potencia instalada real (MW) — percentil 95 de POT_DISP anual en CAMMESA, distribuido proporcionalmente al `pt_mw` PSS/E entre las unidades de la central |
+| `p_nom` | Potencia instalada real (MW) — percentil 95 de POT_DISP anual en CAMMESA |
 | `lat` / `lon` | Coordenadas geográficas (WGS84) |
 
 Notas:
 - Salto Grande (SGDE): `p_nom` × 0.5 (central binacional Argentina/Uruguay)
 - 18 unidades excluidas por conflicto de nombre con CAMMESA
 - 25 unidades sin match en CAMMESA (autoproductores y centrales fuera del MEM)
-- `p_nom` total del sistema: ~26.400 MW
+- `p_nom` total del sistema: ~40.084 MW
 
 ---
 
@@ -287,6 +289,47 @@ Pico de demanda del sistema: 27.439 MW el 01/02/2024 a las 14:00.
 
 ---
 
+### `18_costos_marginales_diagnostico.csv`
+**Fuente:** `18_diagnostico_costos_marginales.py` + completado manualmente
+
+Auditoría de cobertura de costos marginales para las 626 unidades de `generators_2024.csv`.
+La columna `CVP_manual` debe completarse antes de correr el script 18B.
+
+| Campo | Descripción |
+|-------|-------------|
+| `bus_name_origen` | Nombre del bus origen en PSS/E |
+| `nombre_geosadi` | Nombre de la central en GeoSADI |
+| `nemo` | Código CAMMESA |
+| `carrier` | Tipo tecnológico |
+| `p_nom` | Potencia instalada (MW) |
+| `costo_marginal_match` | Costo encontrado automáticamente (USD/MWh) |
+| `fuente_costo` | `CVP_Termica` / `CVP_renovar` / `rescate` / NaN |
+| `CVP_manual` | **Completar:** valor numérico o nombre de lookup para unidades sin costo automático |
+
+---
+
+### `costos_marginales_2024.csv`
+**Fuente:** `18B_build_costos_marginales_2024.py`
+
+Costo marginal fijo anual por unidad generadora. Input directo para la optimización
+(scripts 19 y 21).
+
+| Campo | Descripción |
+|-------|-------------|
+| `gen_key` | Clave única PSS/E |
+| `bus_name_origen` | Nombre del bus origen |
+| `nombre_geosadi` | Nombre de la central en GeoSADI |
+| `nemo` | Código CAMMESA |
+| `bus_conexion500kv` / `bus_conexion500kv_name` | Nodo del modelo al que conecta |
+| `carrier` | Tipo tecnológico PyPSA |
+| `p_nom` | Potencia instalada (MW) |
+| `lat` / `lon` | Coordenadas geográficas (WGS84) |
+| `costo_marginal(USD/mwh)` | Costo marginal fijo anual (USD/MWh) |
+
+Estado actual: ~433 unidades con costo asignado, ~171 con costo=0 (pendientes de completar).
+
+---
+
 ### `valores_2024_clean.csv` *(externo a GitHub)*
 **Fuente:** `13_clean_valores_2024.py`
 **Ruta local:** `Official data/valores_2024_clean.csv`
@@ -317,7 +360,9 @@ scripts 14b, 16 y 17.
 **Ruta local:** `Official data/gen_profiles_2024.csv`
 
 Perfiles horarios de disponibilidad para todas las unidades generadoras del modelo.
-Input para la optimización (script 19).
+Input para la optimización (scripts 19 y 21). Las unidades sin match en CAMMESA
+(autoproductores, fuera del MEM) no aparecen en este archivo y son excluidas del
+network por los scripts 19 y 21 al momento de carga.
 
 | Campo | Descripción |
 |-------|-------------|
@@ -327,7 +372,41 @@ Input para la optimización (script 19).
 | `datetime` | Timestamp (DD/MM/YYYY HH:MM) |
 | `p_max_pu` | Factor de disponibilidad [0,1]. Para solar/eólica/biogas/biomass: ENERGIA/p_nom. Para el resto: POT_DISP/p_nom |
 
-Cobertura: 626 unidades × 8784 horas ≈ 5.3M filas.
+Cobertura: ~577 unidades × 8784 horas ≈ 5.3M filas.
+
+---
+
+## Subcarpeta `clusters/`
+
+Archivos generados por `21_network_clustering.py`. Contiene versiones simplificadas
+de la red para análisis de largo plazo.
+
+| Archivo | Descripción |
+|---------|-------------|
+| `clusters.gpkg` | GeoPackage con layers de buses, centroides y líneas equivalentes para cada nivel de agregación |
+| `cluster_summary_k{N}.csv` | Capacidad instalada por tecnología por cluster para K=N |
+| `cluster_k{N}.nc` | Network PyPSA clusterizado a K=N super-buses — listo para `n.optimize()` (no versionado en git) |
+
+### `clusters.gpkg`
+Layers incluidos para cada N en `CLUSTER_SIZES`:
+- `k{N}_buses` — los 346 buses originales con `cluster_id` asignado. Visualizar con simbología categorizada por `cluster_id`.
+- `k{N}_centroids` — los N super-buses con `p_nom_total_mw` y `n_buses`. Visualizar con tamaño proporcional a `sqrt(p_nom_total_mw) / 5`.
+- `k{N}_lines` — líneas equivalentes entre clusters con `s_nom_mw`. Visualizar con ancho proporcional a `s_nom_mw / 1000`.
+
+### `cluster_summary_k{N}.csv`
+
+| Campo | Descripción |
+|-------|-------------|
+| `cluster_id` | ID del cluster (0 a N-1) |
+| `centroid_lat` / `centroid_lon` | Coordenadas del super-bus |
+| `n_buses` | Buses originales contenidos en el cluster |
+| `p_nom_hydro_mw` | Capacidad hidro + pumped_hydro (MW) |
+| `p_nom_nuclear_mw` | Capacidad nuclear (MW) |
+| `p_nom_termica_mw` | Capacidad térmica: ccgt + ocgt + steam + diesel (MW) |
+| `p_nom_wind_mw` | Capacidad eólica (MW) |
+| `p_nom_solar_mw` | Capacidad solar (MW) |
+| `p_nom_bioenergia_mw` | Capacidad biomass + biogas (MW) |
+| `p_nom_total_mw` | Capacidad total instalada (MW) |
 
 ---
 

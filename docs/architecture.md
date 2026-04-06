@@ -18,9 +18,15 @@ La red 500 kV es el backbone del SADI y el punto de partida.
 - Transformadores de 3 devanados descompuestos en 2 × 2W con bus 500 kV como referencia
 - Fusión de acopladores de barra (series_compensator con r=0): buses internos colapsados
   al representante del grupo antes de construir el network
-- 626 unidades generadoras con p_nom desde datos reales CAMMESA 2024
+- Interconexión Argentina-Brasil: bus ficticio BRASIL, línea RINCON-GARABI-1 con datos
+  reales PSS/E, Link `importacion_brasil` (p_nom=2200 MW, marginal_cost=110 USD/MWh,
+  solo importación)
+- 626 unidades generadoras con p_nom desde datos reales CAMMESA 2024 (~577 con perfil
+  horario — las restantes sin match en CAMMESA se excluyen del network al optimizar)
 - Demanda horaria 2024 por bus (72 buses, 8784 horas)
-- Perfiles de disponibilidad horaria (p_max_pu) para todas las unidades generadoras
+- Perfiles de disponibilidad horaria (p_max_pu) para todas las unidades con match en CAMMESA
+- Costos marginales fijos anuales por unidad (~433 con costo asignado, ~171 con costo=0)
+- Versiones clusterizadas de la red para K=10, K=20, K=50 (clustering k-means geográfico)
 
 **v0.2 y siguientes:**
 - Incorporar niveles 220, 330, 132 kV uno a uno
@@ -29,7 +35,6 @@ La red 500 kV es el backbone del SADI y el punto de partida.
 
 **Fuera de scope:**
 - Distribución (MT/BT)
-
 
 ---
 
@@ -42,7 +47,7 @@ La red 500 kV es el backbone del SADI y el punto de partida.
 | Geometría de líneas | GeoSADI — lineas_alta_tension | .geojson |
 | Generación horaria 2024 | CAMMESA — VALORES_2024.csv | .csv |
 | Demanda horaria 2024 | Archivo interno — Dda_horaria_x_trafo_2024.csv | .csv |
-| Costos marginales | pendiente |
+| Costos marginales | CAMMESA — CVP_Termica.csv + CVP_renovar.csv | .csv |
 
 GeoSADI: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
 
@@ -78,6 +83,16 @@ CAMMESA ────→ 13_clean_valores_2024.py        ──→ valores_2024_c
               15_build_loads_2024.py           ──→ loads_2024.csv
               16_snapshot_dc_pico2024.py       ──→ (validación DC — sin output)
               17_build_gen_profiles_2024.py    ──→ gen_profiles_2024.csv *
+                        │
+CVP CAMMESA → 18_diagnostico_costos.py        ──→ 18_costos_marginales_diagnostico.csv
+              18B_build_costos_marginales.py   ──→ costos_marginales_2024.csv
+                        │
+              19_run_optimization.py           ──→ results_2024_*.nc *
+              20_analyze_results.py            ──→ (pendiente)
+                        │
+              21_network_clustering.py         ──→ clusters.gpkg
+                                                   cluster_summary_k{N}.csv
+                                                   cluster_k{N}.nc *
 
 * Archivos externos a GitHub por tamaño
 ```
@@ -92,29 +107,40 @@ CAMMESA ────→ 13_clean_valores_2024.py        ──→ valores_2024_c
 - Líneas con r, x, b, s_nom (desde ratea_mva del PSS/E)
 - Compensadores serie como Line con x negativo
 - Transformadores con x, s_nom
+- Link `importacion_brasil`: p_nom=2200 MW, solo importación (p_min_pu=0), marginal_cost=110 USD/MWh
 
 ### 2. Generación
-- 626 unidades generadoras mapeadas a buses del network
+- ~577 unidades generadoras activas en el network (626 totales; ~49 excluidas por no tener match en CAMMESA)
 - `p_nom` por unidad: percentil 95 de POT_DISP anual CAMMESA 2024, distribuido
   proporcionalmente al pt_mw del PSS/E entre las unidades de cada central
 - `p_max_pu` horario: ENERGIA/p_nom para solar, eólica, biogas y biomass;
   POT_DISP/p_nom para el resto
 - Carriers: ocgt, steam, ccgt, hydro, nuclear, wind, solar, diesel, biogas, biomass, pumped_hydro
-- `marginal_cost` por unidad: pendiente (script 18)
+- `marginal_cost` por unidad: desde `costos_marginales_2024.csv` (~433 con valor; ~171 con costo=0)
 
 ### 3. Demanda
 - Perfiles horarios 8784h (año 2024, bisiesto)
 - 72 buses con demanda asignada
-- Fuente: Dda_horaria_x_trafo_2024.csv  — demanda por transformador de distribución
+- Fuente: Dda_horaria_x_trafo_2024.csv — demanda por transformador de distribución
 
 ### 4. Validación
 - Flujo DC linealizado (n.lpf()) sobre snapshot de pico de demanda (01/02/2024 14:00)
 - Slack bus: ATUCHA 2_21kV (bus 2620, terminal de máquina nuclear, referencia del PSS/E)
 
-### 5. Optimización (pendiente)
-- n.optimize() sobre las 8784 horas de 2024
-- Objetivo: minimizar costo total de generación
-- Restricciones: límites de capacidad, p_max_pu horario, límites de transmisión
+### 5. Optimización
+- `n.optimize()` DC lineal con solver HiGHS
+- Objetivo: minimizar costo total de generación sujeto a restricciones de red y capacidad
+- Sin restricciones adicionales en esta versión: sin mínimos técnicos ni rampas
+- Load shedding virtual en cada bus (costo=10.000 USD/MWh) para garantizar factibilidad
+- Período configurable: parámetros `FECHA_INICIO`, `FECHA_FIN`, `CHUNK_DIAS`
+- Output: `results_2024_YYYYMMDD_YYYYMMDD.nc`
+
+### 6. Clustering
+- Clustering k-means geográfico nativo de PyPSA (`kmeans_clustering`)
+- Niveles configurables: parámetro `CLUSTER_SIZES`
+- Criterio de pesos configurable: `BUS_WEIGHTING` — uniforme / p_nom / demanda
+- Cada network clusterizado queda funcional para `n.optimize()` futura
+- Output: `clusters.gpkg` + `cluster_summary_k{N}.csv` + `cluster_k{N}.nc`
 
 ---
 
@@ -131,8 +157,14 @@ CAMMESA ────→ 13_clean_valores_2024.py        ──→ valores_2024_c
 - p_nom desde percentil 95 de POT_DISP — evita outliers sin descartar picos reales
 - Yacyretá: CAMMESA reporta la central entera; se distribuye por p_nom entre las 20 unidades
 - Salto Grande (SGDE): factor 0.5 sobre POT_DISP (central binacional Argentina/Uruguay)
-- Unidades sin match en CAMMESA: excluidas del modelo
-- Importaciones internacionales (ej: Brasil ~2.267 MW): no modeladas en esta versión
+- Unidades sin match en CAMMESA (autoproductores, fuera del MEM): excluidas del network
+- Importaciones internacionales (Brasil): modeladas como Link con costo fijo de referencia
+
+### Costos marginales
+- Costo fijo anual por unidad (no varía por hora ni por combustible en esta versión)
+- Térmica/nuclear: desde CVP_Termica CAMMESA, filtro año 2026 semana 1
+- Renovables: promedio anual de CVP_renovar CAMMESA 2024
+- Hidro pendiente: costo=0 hasta completar el archivo de diagnóstico manualmente
 
 ### Flujo DC
 - Aproximación DC estándar: sin pérdidas, ángulos pequeños
@@ -147,3 +179,4 @@ CAMMESA ────→ 13_clean_valores_2024.py        ──→ valores_2024_c
 - **Fuentes primarias**: GeoSADI + PSS/E son la fuente de verdad, no OSM
 - **Modularidad**: cada nivel de tensión se construye y valida por separado
 - **Git liviano**: solo scripts, documentación y CSVs de data procesada. Sin .nc ni archivos pesados
+- **Flexibilidad**: parámetros configurables en la sección CONFIGURACION de cada script — sin modificar lógica

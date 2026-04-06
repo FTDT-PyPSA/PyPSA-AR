@@ -77,9 +77,9 @@ geográficas a las unidades generadoras del modelo.
 ✅ 669 unidades generadoras en `generators_final.csv`
 ✅ 626 unidades en `generators_2024.csv` con p_nom real 2024 (p95 POT_DISP)
 ✅ 77 conflictos PSS/E vs CAMMESA detectados y resueltos manualmente
-✅ p_nom total del sistema: ~26.400 MW
-✅ Perfiles horarios p_max_pu 2024: `gen_profiles_2024.csv` (externo a GitHub, ~5.3M filas)
-🔲 Costos marginales por unidad: pendiente
+✅ p_nom total del sistema: ~40.084 MW
+✅ Perfiles horarios p_max_pu 2024: `gen_profiles_2024.csv` (externo a GitHub, ~5.3M filas, ~577 unidades)
+✅ Costos marginales: `costos_marginales_2024.csv` (~433 unidades con costo asignado, ~171 con costo=0 pendientes de completar)
 
 ---
 
@@ -115,27 +115,73 @@ Resultados (01/02/2024 14:00):
 - Inyección del slack (ATUCHA 2): 1.013 MW
 - Demanda total: 27.439 MW
 - Brecha explicada por importaciones de Brasil (~2.267 MW, no modeladas)
-- Línea más cargada: C.COSTA-P.BAND.-1 al 133% de su rating PSS/E (el cual se identifico en 866 mva, muy restrictivo para las condiciones de la linea)
+- Línea más cargada: C.COSTA-P.BAND.-1 al 133% de su rating PSS/E (rating identificado en 866 MVA, conservador para las condiciones reales de la línea)
 
 ### Estado
 
 ✅ Flujo DC converge
 ✅ Balance generación/demanda consistente con datos CAMMESA
-✅ Congestión en corredor C.COSTA-P.BAND. coherente con la limitación de modelar solo red 500 kV
+✅ Congestión en corredor C.COSTA-P.BAND. coherente con la limitación de modelar solo red 500 kV sin los paralelos de niveles inferiores
 
 ---
 
 ## 5. Costos marginales
 
-### Fuente: CAMMESA posoperativos
+### Fuente: CAMMESA — CVP_Termica.csv + CVP_renovar.csv
 
-Costos marginales horarios por central para el año 2024.
+Costos variables de producción por central, extraídos de los archivos posoperativos de CAMMESA.
 
-Estado: 🔲 pendiente de obtención.
+Procesado por:
+- `18_diagnostico_costos_marginales.py` → `18_costos_marginales_diagnostico.csv` (auditoría de cobertura)
+- `18B_build_costos_marginales_2024.py` → `costos_marginales_2024.csv` (tabla final)
+
+Lógica de asignación:
+- Térmica/nuclear: match por clave reducida (nemo4 + número de unidad) contra CVP_Termica
+- Renovables: match por nombre de central normalizado contra CVP_renovar (promedio anual Jan-24 a Dec-24)
+- Hidro y pendientes: columna `CVP_manual` completada manualmente en el diagnóstico
+
+Archivos CVP fuente: externos a GitHub.
+Archivo resultante: `costos_marginales_2024.csv` — versionado en Git.
+
+### Estado
+
+✅ ~433 unidades con costo marginal asignado
+⚠️ ~171 unidades con costo=0 (hidros pendientes de completar por equipo de trabajo)
 
 ---
 
-## 6. Renovables (VRE) — para etapas futuras
+## 6. Optimización y clustering
+
+### Script 19: `19_run_optimization.py`
+
+Despacho económico lineal DC (OPF) sobre la red 500 kV para el período configurado.
+Usa `n.optimize()` con solver HiGHS. Parámetros configurables: período temporal,
+chunking por días para manejo de memoria, tratamiento de generadores sin costo.
+
+Archivo resultante: `results_2024_YYYYMMDD_YYYYMMDD.nc` en `networks/` — externo a GitHub.
+
+### Script 21: `21_network_clustering.py`
+
+Clustering espacial k-means nativo de PyPSA para simplificación de la red.
+Genera redes clusterizadas funcionales para análisis de largo plazo.
+Parámetro configurable: `CLUSTER_SIZES` (lista de niveles de agregación) y
+criterio de pesos (`BUS_WEIGHTING`).
+
+Archivos resultantes en `data/network_500kv/clusters/`:
+- `clusters.gpkg` — visualización QGIS con layers por nivel de agregación
+- `cluster_summary_k{N}.csv` — capacidad instalada por tecnología por cluster
+- `cluster_k{N}.nc` — network clusterizado funcional para `n.optimize()`
+
+### Estado
+
+✅ Script 19 construido y listo para correr
+✅ Script 21 corrido exitosamente para K=10, K=20, K=50
+✅ Clusters visualizados en QGIS (`data/network_500kv/clusters/clusters.qgz`)
+🔲 Script 20 (análisis de resultados de optimización): pendiente
+
+---
+
+## 7. Renovables (VRE) — para etapas futuras
 
 ### Viento y solar
 
@@ -151,7 +197,7 @@ Estado: 🔲 no iniciado.
 
 ---
 
-## 7. Precios de combustibles y emisiones — para etapas futuras
+## 8. Precios de combustibles y emisiones — para etapas futuras
 
 ### Fuentes
 

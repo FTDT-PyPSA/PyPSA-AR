@@ -52,6 +52,7 @@ Estado de la red 500 kV:
 - 300 transformadores
 - Fusión de acopladores de barra aplicada: 17 buses fusionados al representante del grupo
 - 1 componente conexa, 0 buses aislados
+- Interconexión Argentina-Brasil incluida: Link `importacion_brasil` (p_nom=2200 MW)
 
 ---
 
@@ -84,14 +85,38 @@ Resultados del snapshot de validación (01/02/2024 14:00 — pico de demanda 202
 
 ---
 
-## Fase 4 — Optimización año base 2024 🔲 PENDIENTE
+## Fase 4 — Costos marginales y optimización ⚠️ EN CURSO
 
-Objetivo: correr la optimización completa 8760h y calibrar el despacho contra CAMMESA.
+Objetivo: incorporar costos marginales, correr el despacho económico 2024 y analizar resultados.
 
-Tareas pendientes:
-- Script 18: incorporar costos marginales por unidad (fuente: CAMMESA posoperativos)
-- Script 19: optimización n.optimize() — 8784h, todas las unidades, p_max_pu desde script 17
-- Script 20: calibración — comparar despacho simulado vs real por tecnología, ajustar hasta ≤ ±5%
+| Script | Descripción | Estado |
+|--------|-------------|--------|
+| `18_diagnostico_costos_marginales.py` | Auditoría de cobertura de costos por unidad | ✅ |
+| `18B_build_costos_marginales_2024.py` | Tabla de costos marginales fijos anuales | ✅ |
+| `19_run_optimization.py` | Despacho económico DC (OPF) — `n.optimize()` | ✅ construido, pendiente de correr año completo |
+| `20_analyze_results.py` | Análisis de resultados vs datos reales CAMMESA | 🔲 pendiente |
+
+Notas:
+- Costos pendientes: ~171 unidades (principalmente hidro) con costo=0 hasta que equipo de trabajo complete el archivo de diagnóstico
+- Script 19 parametrizado: período configurable (`FECHA_INICIO`/`FECHA_FIN`), chunking por días (`CHUNK_DIAS`), load shedding virtual para garantizar factibilidad
+- Script 20 levantará el `.nc` de resultados sin recorrer la optimización
+
+---
+
+## Fase 4b — Clustering espacial ✅ COMPLETADA
+
+Objetivo: generar versiones simplificadas de la red para análisis de largo plazo.
+
+| Script | Descripción | Estado |
+|--------|-------------|--------|
+| `21_network_clustering.py` | Clustering k-means nativo PyPSA | ✅ |
+
+Resultados:
+- Clustering corrido para K=10, K=20, K=50 usando `kmeans_clustering` de PyPSA 0.30.3
+- Criterio actual: pesos uniformes (clustering puramente geográfico)
+- Redes clusterizadas exportadas como `.nc` — funcionales para `n.optimize()` futura
+- Visualización en QGIS: `data/network_500kv/clusters/clusters.qgz`
+- Criterio de agrupamiento alternativo (`BUS_WEIGHTING = "p_nom"` o `"demanda"`) disponible como parámetro configurable
 
 ---
 
@@ -105,6 +130,8 @@ Incorporar transformadores inter-nivel.
 
 ## Fase 6 — Escenarios de expansión 🔲 PENDIENTE
 
-Con el modelo base calibrado, correr escenarios de política energética y expansión de red.
+Con el modelo base validado, correr escenarios de política energética y expansión de red.
+Requiere previamente: modelo calibrado (Fase 4), definición de escenarios de demanda futura,
+curvas de costo de nuevas tecnologías y decisión sobre niveles de clustering a utilizar.
 
 Fecha límite del proyecto: 30/04/2026

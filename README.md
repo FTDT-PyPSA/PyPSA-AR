@@ -2,7 +2,7 @@
 
 Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
 
-**Estado actual:** Pipeline 500 kV completo — scripts 01→17 finalizados. Red construida, generación y demanda horaria 2024 incorporadas, validación DC con snapshot de pico de demanda exitosa.
+**Estado actual:** Scripts 01→19 y 21 finalizados. Red 500 kV construida, generación y demanda horaria 2024 incorporadas, costos marginales asignados, despacho económico DC listo para correr, clustering espacial completado.
 **Fecha límite:** 30/04/2026
 
 ---
@@ -99,13 +99,28 @@ python <ruta-al-repo>/scripts/network_500kv/14b_build_generators_2024.py
 python <ruta-al-repo>/scripts/network_500kv/15_build_loads_2024.py
 python <ruta-al-repo>/scripts/network_500kv/16_snapshot_dc_pico2024.py  # validación DC pico demanda
 python <ruta-al-repo>/scripts/network_500kv/17_build_gen_profiles_2024.py
+
+# Costos marginales — requieren archivos CVP externos (no versionados en git)
+python <ruta-al-repo>/scripts/network_500kv/18_diagnostico_costos_marginales.py
+# → completar columna CVP_manual en 18_costos_marginales_diagnostico.csv antes de continuar
+python <ruta-al-repo>/scripts/network_500kv/18B_build_costos_marginales_2024.py
+
+# Optimización — configurar FECHA_INICIO, FECHA_FIN y CHUNK_DIAS antes de correr
+python <ruta-al-repo>/scripts/network_500kv/19_run_optimization.py
+
+# Script 20 (análisis de resultados): pendiente de construcción
+# → levantar results_2024_*.nc y comparar despacho simulado vs real CAMMESA
+
+# Clustering espacial — configurar CLUSTER_SIZES y BUS_WEIGHTING antes de correr
+python <ruta-al-repo>/scripts/network_500kv/21_network_clustering.py
 ```
 
 > **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI, CAMMESA) están hardcodeadas en la sección
 > `CONFIGURACION` al inicio de cada script. Si la estructura de carpetas es distinta, actualizarlas antes de correr.
 
-> **Archivos externos a GitHub:** `VALORES_2024.csv`, `valores_2024_clean.csv`, `Dda_horaria_x_trafo_2024.csv`
-> y `gen_profiles_2024.csv` no están versionados por tamaño. Ver `docs/data_sources.md` para su origen.
+> **Archivos externos a GitHub:** `VALORES_2024.csv`, `valores_2024_clean.csv`, `Dda_horaria_x_trafo_2024.csv`,
+> `gen_profiles_2024.csv`, `CVP_Termica.csv`, `CVP_renovar.csv`, `results_2024_*.nc` y `cluster_k{N}.nc`
+> no están versionados por tamaño o volumen. Ver `docs/data_sources.md` para su origen.
 
 ---
 

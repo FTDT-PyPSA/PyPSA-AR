@@ -31,6 +31,11 @@ Correr en orden desde WSL con el entorno `pypsa-earth-lock`.
 | `15_build_loads_2024.py` | Construye demanda horaria 2024 por bus 500 kV en formato largo | `Dda_horaria_x_trafo_2024.csv` (externo) + `buses_final.csv` + `lines_500kv_final.csv` | `loads_2024.csv` |
 | `16_snapshot_dc_pico2024.py` | Flujo DC linealizado en el snapshot de máximo pico de demanda 2024 | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `valores_2024_clean.csv` (externo) | (consola — sin archivo de salida) |
 | `17_build_gen_profiles_2024.py` | Construye perfiles horarios de disponibilidad (p_max_pu) para todas las unidades generadoras | `generators_2024.csv` + `valores_2024_clean.csv` (externo) | `gen_profiles_2024.csv` (externo) |
+| `18_diagnostico_costos_marginales.py` | Diagnóstico de cobertura de costos marginales por unidad generadora | `generators_2024.csv` + `CVP_Termica.csv` (externo) + `CVP_renovar.csv` (externo) | `18_costos_marginales_diagnostico.csv` |
+| `18B_build_costos_marginales_2024.py` | Construye tabla de costos marginales fijos anuales por unidad generadora | `generators_2024.csv` + `costos_marginales_diagnostico_completado.csv` + `CVP_Termica.csv` (externo) + `CVP_renovar.csv` (externo) | `costos_marginales_2024.csv` |
+| `19_run_optimization.py` | Despacho económico DC lineal (OPF) sobre la red 500 kV | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `costos_marginales_2024.csv` + `gen_profiles_2024.csv` (externo) | `results_2024_YYYYMMDD_YYYYMMDD.nc` |
+| `20_analyze_results.py` | *(pendiente)* Análisis de resultados de la optimización vs datos reales CAMMESA | `results_2024_*.nc` | Por definir |
+| `21_network_clustering.py` | Clustering espacial k-means de la red para análisis de largo plazo | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `costos_marginales_2024.csv` + `gen_profiles_2024.csv` (externo) | `clusters.gpkg` + `cluster_summary_k{N}.csv` + `cluster_k{N}.nc` |
 | `aliases_500kv.py` | Diccionario de aliases para matching GeoSADI | — | (módulo auxiliar) |
 
 ---
@@ -136,6 +141,8 @@ Decisiones de modelado:
   automáticamente y se fusionan sus buses al representante del grupo (menor bus_id)
   antes de agregar líneas y trafos. Los CSVs originales no se modifican.
 - Perfil PSS/E (v_mag_pu, v_ang_deg) guardado como atributos en n.buses para warm start
+- Interconexión Argentina-Brasil incluida: bus ficticio BRASIL, línea RINCON-GARABI-1
+  (datos reales PSS/E), Link `importacion_brasil` (p_nom=2200 MW, marginal_cost=110 USD/MWh)
 - Output en `networks/network_500kv.nc` (no versionado en git)
 
 ---
@@ -155,49 +162,32 @@ posiciones [4:6] del bus_name:
 - FV → solar, EO → wind, BG → biogas, BM → biomass, HB → pumped_hydro
 - Posiciones [4:8] = NUCL → nuclear
 
-**Categorías de resultado en `match_type`:**
-- `directo` — el generador ya está en un bus del modelo
-- `bfs` — alcanzó un nodo del modelo en N saltos (típico: 1–3)
-- `sin_conexion` — la subred del PSS/E no tiene continuidad con el backbone
-
 ---
 
 ### `10_map_loads.py`
-Parsea la sección `LOAD DATA` del PSS/E y mapea cada carga al nodo del modelo
-usando la misma lógica BFS que `09_map_generators.py`.
-
-Se usa únicamente el campo `PL` (potencia activa constante). Los campos `IP` e `YP`
-son cero en todo el raw de CAMMESA.
-
-Nota: ~3.720 MW de carga aparecen como `sin_conexion` porque la red de 132 kV de
-CABA/conurbano no tiene los ramales de conexión hacia las subestaciones de frontera
-modelados en el PSS/E. Esta carga queda agregada en esas tres subestaciones de frontera.
+Misma lógica BFS que `09_map_generators.py` aplicada a las cargas del PSS/E.
+Excluye cargas de áreas internacionales (Paraguay, Chile SING, Brasil, Bolivia, Uruguay).
 
 ---
 
 ### `10b_visualize_qgis.py`
-Calcula el balance generación/carga por nodo del modelo y exporta a GeoPackage
-para visualización en QGIS como mapa de burbujas.
-
-Layer exportado: `balance_por_bus` en `data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg`
+Exporta el balance generación/carga por nodo del modelo a un GeoPackage para QGIS.
 
 ---
 
 ### `11_add_geo_to_generators.py`
-Extiende `generators_mapped.csv` con coordenadas geográficas de GeoSADI.
+Asigna coordenadas GeoSADI y nombre de central a cada generador de `generators_mapped.csv`.
 
-El matching geográfico se hace por los primeros 4 caracteres del `bus_name_origen`
-(PSS/E) contra el campo `Nemo` de `centrales_electricas.csv` (GeoSADI).
-
-Outputs:
-- `generators_readypypsa.csv` — geo_match='exacto', bus_conexion500kv resuelto, carrier válido
-- `generators_pendingmanualpypsa.csv` — requieren revisión manual (no se versiona en git)
+Matching geográfico: compara los primeros 4 caracteres del `bus_name_origen` contra el
+campo `Nemo` de `centrales_electricas.csv`. Resuelve ambigüedades por tipo tecnológico
+usando el índice carrier → tipo GeoSADI. Los casos irreducibles se resuelven vía el
+diccionario `NEMO_PREFERIDO` hardcodeado en el script.
 
 ---
 
 ### `12_build_generators_final.py`
-Une `generators_readypypsa.csv` con las filas de `generators_manualpypsa.csv` que
-tienen ambos campos completos para producir `generators_final.csv`.
+Une `generators_readypypsa.csv` con las filas de `generators_manualpypsa.csv` que tienen
+`nombre_geosadi` y `bus_conexion500kv` completos.
 
 El campo `nemo` se resuelve haciendo join `nombre_geosadi` → `Nombre` en
 `centrales_electricas.csv` de GeoSADI.
@@ -338,6 +328,8 @@ generadoras del modelo, para las 8784 horas de 2024.
   POT_DISP refleja la capacidad disponible real hora a hora, incorporando paradas
   programadas, mantenimientos e indisponibilidades.
 - En ambos casos el resultado se clipea entre 0 y 1.
+- Unidades sin match en CAMMESA (autoproductores, fuera del MEM): excluidas del output.
+  El script 19 y 21 eliminan del network cualquier generador sin perfil en este archivo.
 
 **Matching GRUPO → unidad del modelo:**
 Mismo criterio que el script 14b: match directo por `bus_name_origen`, o distribución
@@ -348,6 +340,97 @@ Procesamiento en chunks (500.000 filas) para no exceder RAM.
 
 Output: `gen_profiles_2024.csv` — externo a GitHub por tamaño (~5.3M filas).
 Columnas: `gen_key`, `bus_conexion500kv_name`, `carrier`, `datetime`, `p_max_pu`.
+
+---
+
+### `18_diagnostico_costos_marginales.py`
+Diagnóstico de cobertura de costos marginales para las 626 unidades de `generators_2024.csv`.
+No construye el archivo final — es un paso de auditoría previo al 18B.
+
+Grupos de análisis:
+- **Térmica y nuclear**: match contra `CVP_Termica.csv` por clave reducida (primeras 4 siglas + últimos 2 dígitos). Prioridad de combustible: GN > combustible único > FO sobre GO.
+- **Renovables**: match por `nombre_geosadi` normalizado vs campo `Proyecto` de `CVP_renovar.csv`.
+- **Hidro**: datos pendientes de completar manualmente en la columna `CVP_manual`.
+
+Output: `18_costos_marginales_diagnostico.csv` — tabla con cobertura de costos por unidad.
+La columna `CVP_manual` debe completarse manualmente antes de correr el script 18B.
+
+---
+
+### `18B_build_costos_marginales_2024.py`
+Construye `costos_marginales_2024.csv` con costo marginal fijo anual por unidad generadora.
+Requiere que `costos_marginales_diagnostico_completado.csv` esté completado (generado por 18).
+
+**Fuentes de costo por tecnología:**
+- Térmica/nuclear: costo único desde `CVP_Termica.csv` (filtro año 2026, semana 1)
+- Renovables: promedio anual de columnas Jan-24 a Dec-24 de `CVP_renovar.csv`
+- Hidro y pendientes: desde columna `CVP_manual` del diagnóstico completado
+
+**Lógica de CVP_manual:**
+- Si es numérico: se usa directamente como costo marginal
+- Si es texto: se busca ese nombre en el CVP correspondiente según tecnología
+
+Parámetros configurables:
+- `EXCLUIR_SIN_COSTO` — False (default): asigna costo=0 a unidades sin datos. True: las excluye del output.
+
+---
+
+### `19_run_optimization.py`
+Despacho económico lineal DC (OPF) sobre la red 500 kV para el período configurado.
+Usa `n.optimize()` de PyPSA con solver HiGHS.
+
+El script carga dinámicamente generadores, perfiles y demanda sobre `network_500kv.nc`
+sin modificar ese archivo base. Los resultados se guardan en un `.nc` separado.
+
+**Decisiones de modelado:**
+- DC OPF lineal: sin pérdidas, sin tensiones, solo flujos activos
+- Sin restricciones adicionales: no hay mínimos técnicos ni rampas
+- Slack bus: `ATUCHA 2_21kV`
+- Link Brasil: solo importación (`p_min_pu=0`), libre para el solver
+- Load shedding virtual en cada bus (costo=10.000 USD/MWh) para garantizar factibilidad
+- Generadores sin costo marginal en `costos_marginales_2024.csv`: costo=0 por default
+- Generadores sin perfil en `gen_profiles_2024.csv`: excluidos del network
+
+**Parámetros configurables:**
+- `FECHA_INICIO` / `FECHA_FIN` — período de simulación
+- `CHUNK_DIAS` — None (problema único) o número de días por bloque (reduce RAM)
+- `EXCLUIR_SIN_COSTO` — False (costo=0) o True (excluir del modelo)
+
+Output: `results_2024_YYYYMMDD_YYYYMMDD.nc` en `networks/` (no versionado en git).
+El sufijo de fechas evita pisar corridas anteriores de distintos períodos.
+
+---
+
+### `20_analyze_results.py` *(pendiente)*
+Análisis de resultados de la optimización vs datos reales CAMMESA.
+Levanta `results_2024_*.nc` sin necesidad de recorrer la optimización.
+
+Análisis previstos:
+- Mix de generación por tecnología y por período
+- Comparación despacho simulado vs real CAMMESA
+- Líneas congestionadas por período
+- Importación acumulada desde Brasil
+
+---
+
+### `21_network_clustering.py`
+Genera versiones simplificadas de la red mediante clustering espacial k-means nativo
+de PyPSA (`kmeans_clustering`). Para cada nivel de agregación en `CLUSTER_SIZES`
+produce un network clusterizado funcional para optimización y archivos de visualización.
+
+El network base se carga con generadores, perfiles horarios completos, demanda y costos
+antes de clusterizar, de forma que cada network clusterizado resultante quede listo
+para `n.optimize()` sin pasos adicionales.
+
+**Parámetros configurables:**
+- `CLUSTER_SIZES` — lista de niveles de agregación deseados (ej: [10, 20, 50])
+- `BUS_WEIGHTING` — criterio de pesos: `"uniforme"` (geográfico puro), `"p_nom"` (pondera por generación instalada), `"demanda"` (pondera por demanda)
+- `EXCLUIR_SIN_COSTO` — False (costo=0) o True (excluir del modelo)
+
+**Outputs** en `data/network_500kv/clusters/`:
+- `clusters.gpkg` — layers `k{N}_buses`, `k{N}_centroids`, `k{N}_lines` para cada N
+- `cluster_summary_k{N}.csv` — capacidad instalada por tecnología por cluster
+- `cluster_k{N}.nc` — network clusterizado exportado (no versionado en git)
 
 ---
 
