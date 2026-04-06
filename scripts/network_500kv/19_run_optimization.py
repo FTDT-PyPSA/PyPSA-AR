@@ -68,8 +68,8 @@ OUTPUT_DIR    = "/mnt/c/Work/pypsa-ar-base/networks"
 # Para una prueba rapida: FECHA_FIN = "2024-01-01" (un solo dia = 24 snapshots)
 # Para el pico de demanda: FECHA_INICIO = FECHA_FIN = "2024-02-01"
 # Para el año completo:    FECHA_FIN = "2024-12-31"
-FECHA_INICIO  = "2024-01-01"
-FECHA_FIN     = "2024-01-07"
+FECHA_INICIO  = "2024-02-01"
+FECHA_FIN     = "2024-02-07"
 
 # --- Chunking ---
 # None  : resuelve todo el periodo en un solo problema (mas rapido pero mas RAM)
@@ -94,6 +94,12 @@ SLACK_BUS = "ATUCHA 2_21kV"
 
 # --- Nombre del Link de importacion Brasil en el network ---
 BRASIL_LINK = "importacion_brasil"
+
+# --- Buses aislados conocidos a excluir del OPF ---
+# Se excluyen explicitamente del script 19 porque aparecen en el network base
+# pero no forman parte de la red principal abastecible en la optimizacion.
+# BRASIL no se toca: queda como bus fuente del Link internacional.
+BUSES_A_EXCLUIR_OPF = {"T PEPE", "PBUENA2", "PBUENA2_20kV"}
 
 
 # =============================================================================
@@ -134,6 +140,37 @@ def parsear_snapshots_csv(serie):
     """
     return pd.to_datetime(serie, dayfirst=True, format="%d/%m/%Y %H:%M")
 
+def solver_status_ok(status):
+    """
+    Interpreta de forma robusta el estado devuelto por PyPSA/Linopy/solver.
+
+    Casos esperables segun version:
+        "ok"
+        "optimal"
+        ("ok", "optimal")
+        ["ok", "optimal"]
+
+    Retorna True si la optimizacion fue exitosa.
+    """
+    if status is None:
+        return False
+
+    if isinstance(status, str):
+        return status.strip().lower() in {"ok", "optimal"}
+
+    if isinstance(status, (tuple, list)):
+        status_norm = tuple(str(x).strip().lower() for x in status)
+        return status_norm in {
+            ("ok",),
+            ("optimal",),
+            ("ok", "optimal"),
+            ("optimal", "ok"),
+        }
+
+    return str(status).strip().lower() in {"ok", "optimal"}
+
+
+
 
 # =============================================================================
 # PASO 1 — Cargar network base
@@ -166,9 +203,68 @@ def cargar_network():
     else:
         print(f"  [AVISO] Link '{BRASIL_LINK}' no encontrado en el network")
 
+    # --- Excluir buses aislados conocidos que no deben entrar al OPF ---
+    excluir_buses_aislados_opf(n)
+
+    print(f"  Buses finales : {len(n.buses)}")
+    print(f"  Lineas finales: {len(n.lines)}")
+    print(f"  Trafos finales: {len(n.transformers)}")
+    print(f"  Links finales : {len(n.links)}")
+
     return n
 
+def excluir_buses_aislados_opf(n):
+    """
+    Excluye del network buses aislados conocidos que no deben participar
+    de la optimizacion 2024.
 
+    Se eliminan:
+        - los buses indicados en BUSES_A_EXCLUIR_OPF
+        - lineas conectadas a esos buses
+        - transformadores conectados a esos buses
+        - links conectados a esos buses (si existieran)
+
+    No toca BRASIL ni aplica una purga general por subredes.
+    """
+    buses_presentes = [b for b in BUSES_A_EXCLUIR_OPF if b in n.buses.index]
+
+    if not buses_presentes:
+        print("  Sin buses aislados conocidos para excluir del OPF.")
+        return
+
+    print(f"  Excluyendo buses aislados conocidos del OPF: {sorted(buses_presentes)}")
+
+    lineas_drop = n.lines[
+        n.lines["bus0"].isin(buses_presentes) |
+        n.lines["bus1"].isin(buses_presentes)
+    ].index.tolist()
+
+    trafos_drop = n.transformers[
+        n.transformers["bus0"].isin(buses_presentes) |
+        n.transformers["bus1"].isin(buses_presentes)
+    ].index.tolist()
+
+    links_drop = n.links[
+        n.links["bus0"].isin(buses_presentes) |
+        n.links["bus1"].isin(buses_presentes)
+    ].index.tolist()
+
+    for name in lineas_drop:
+        n.remove("Line", name)
+
+    for name in trafos_drop:
+        n.remove("Transformer", name)
+
+    for name in links_drop:
+        n.remove("Link", name)
+
+    for bus in buses_presentes:
+        n.remove("Bus", bus)
+
+    print(f"    Buses removidos  : {len(buses_presentes)}")
+    print(f"    Lineas removidas : {len(lineas_drop)}")
+    print(f"    Trafos removidos : {len(trafos_drop)}")
+    print(f"    Links removidos  : {len(links_drop)}")
 # =============================================================================
 # PASO 2 — Preparar snapshots del periodo configurado
 # =============================================================================
@@ -315,9 +411,9 @@ def agregar_perfiles(n, snapshots):
     # Excluir del network los generadores sin perfil en gen_profiles_2024.csv
     gens_sin_perfil = gens_en_red - set(cols_validas)
     if gens_sin_perfil:
-        n.remove("Generator", list(gens_sin_perfil))
+        for gen_name in sorted(gens_sin_perfil):
+            n.remove("Generator", gen_name)
         print(f"  {len(gens_sin_perfil)} generadores sin perfil excluidos del network (fuera del MEM)")
-    
 
 # =============================================================================
 # PASO 5 — Agregar demanda horaria por bus
@@ -445,7 +541,7 @@ def _correr_chunk(n, snapshots_chunk):
 
     status = n.optimization_status if hasattr(n, "optimization_status") else resultado
 
-    if status not in ("optimal", "ok") and str(status).lower() not in ("optimal", "ok"):
+    if not solver_status_ok(status):
         print(f"\n  [ERROR] Solver retorno estado: {status}")
         print(f"          No se guarda el archivo de resultados.")
         print(f"          Posibles causas:")
@@ -498,10 +594,11 @@ def _correr_con_chunks(n, snapshots_totales):
             n.loads_t.p_set = p_set_full.reindex(chunk).fillna(0.0)
 
         n.set_snapshots(chunk)
+       
         resultado = n.optimize(solver_name="highs")
         status    = n.optimization_status if hasattr(n, "optimization_status") else resultado
 
-        if status not in ("optimal", "ok") and str(status).lower() not in ("optimal", "ok"):
+        if not solver_status_ok(status):
             print(f"    [ERROR] Chunk {i} infeasible — estado: {status}. Se aborta.")
             return None
 
@@ -590,7 +687,7 @@ def reportar_resumen(n):
     gen_real    = gen_p[gens_reales]
 
     gen_total_mwh = gen_real.sum().sum()
-    print(f"\n  Generacion total (sin load shedding): {gen_total_mwh:,.0f} MWh")
+    print(f"\n  Generacion total: {gen_total_mwh:,.0f} MWh")
 
     # Mix por carrier
     carriers = n.generators.loc[gens_reales, "carrier"]
