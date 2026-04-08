@@ -68,8 +68,8 @@ OUTPUT_DIR    = "/mnt/c/Work/pypsa-ar-base/networks"
 # Para una prueba rapida: FECHA_FIN = "2024-01-01" (un solo dia = 24 snapshots)
 # Para el pico de demanda: FECHA_INICIO = FECHA_FIN = "2024-02-01"
 # Para el año completo:    FECHA_FIN = "2024-12-31"
-FECHA_INICIO  = "2024-01-01"
-FECHA_FIN     = "2024-12-31"
+FECHA_INICIO  = "2024-02-01"
+FECHA_FIN     = "2024-02-07"
 
 # --- Chunking ---
 # None  : resuelve todo el periodo en un solo problema (mas rapido pero mas RAM)
