@@ -6,8 +6,10 @@ pumped_hydro y nuclear tienen p_max_pu limitado a su ENERG_OPERADA real 2024.
 
 Diferencias respecto al script 19:
     - Input de perfiles: gen_profiles_2024b.csv (script 17b)
+    - Sin carriers fijos ni fixed_dispatch — todos los generadores son optimizables
     - Wind, solar y nuclear con costo marginal forzado a 0
     - Sin p_min_pu en ningun generador
+    - Reporte agrupa termicas (ocgt+ccgt+steam+diesel) y pumped_hydro dentro de hydro
 
 Inputs (versionados en GitHub):
     networks/network_500kv.nc
@@ -20,6 +22,9 @@ Inputs (externos a GitHub):
 
 Output:
     networks/results_2024b_YYYYMMDD_YYYYMMDD.nc
+    results/results_generators_FECHAS.csv      
+    results/results_lines_FECHAS.csv
+       
 
 Decisiones de modelado:
     - DC OPF lineal: sin perdidas, sin tensiones, solo flujos activos.
@@ -50,7 +55,8 @@ GEN_FILE      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/generators_2024.cs
 LOADS_FILE    = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/loads_2024.csv"
 COSTOS_FILE   = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/costos_marginales_2024.csv"
 PROFILES_FILE = "/mnt/c/Work/pypsa-ar-sandbox/Official data/gen_profiles_2024b.csv"
-OUTPUT_DIR    = "/mnt/c/Work/pypsa-ar-base/networks"
+OUTPUT_DIR        = "/mnt/c/Work/pypsa-ar-base/networks"
+OUTPUT_RESULTS_DIR = "/mnt/c/Work/pypsa-ar-base/results"
 
 # Periodo de simulacion
 FECHA_INICIO  = "2024-02-01"
@@ -203,7 +209,6 @@ def agregar_generadores(n, snapshots):
     # Forzar costo 0 a carriers definidos
     mask_cero = gen["carrier"].isin(CARRIERS_COSTO_CERO)
     gen.loc[mask_cero, "costo_marginal"] = 0.0
-    print(f"  Costo=0 forzado: {mask_cero.sum()} generadores ({', '.join(sorted(CARRIERS_COSTO_CERO))})")
 
     # Generadores sin costo
     sin_costo   = gen["costo_marginal"].isna()
@@ -500,6 +505,114 @@ def reportar_resumen(n):
 
 
 # =============================================================================
+# EXPORTAR RESULTADOS
+# =============================================================================
+
+def exportar_resultados(n):
+    """
+    Exporta dos CSVs con los resultados de la corrida
+
+    """
+    os.makedirs(OUTPUT_RESULTS_DIR, exist_ok=True)
+    ini = pd.Timestamp(FECHA_INICIO).strftime("%Y%m%d")
+    fin = pd.Timestamp(FECHA_FIN).strftime("%Y%m%d")
+    sufijo = f"{ini}_{fin}"
+
+    # --- Generadores ---
+    gen_p       = n.generators_t.p
+    gens_reales = [c for c in gen_p.columns if not c.startswith("loadshed_")]
+    gen_real    = gen_p[gens_reales]
+
+    n_snapshots = len(n.snapshots)
+
+    gen_meta = pd.read_csv(GEN_FILE)[["gen_key", "bus_name_origen", "nombre_geosadi"]].copy()
+    gen_meta["gen_key"] = gen_meta["gen_key"].astype(str)
+
+    rows = []
+    for gkey in gens_reales:
+        serie   = gen_real[gkey]
+        p_nom   = n.generators.loc[gkey, "p_nom"]
+        carrier = n.generators.loc[gkey, "carrier"]
+        bus     = n.generators.loc[gkey, "bus"]
+        e_total = serie.sum()
+        p_prom  = serie.mean()
+        p_pico  = serie.max()
+        fc      = (e_total / (p_nom * n_snapshots) * 100) if p_nom > 0 else 0.0
+        rows.append({
+            "gen_key"             : gkey,
+            "carrier"             : carrier,
+            "bus"                 : bus,
+            "p_nom_mw"            : round(p_nom, 4),
+            "energia_total_mwh"   : round(e_total, 2),
+            "potencia_promedio_mw": round(p_prom, 2),
+            "potencia_pico_mw"    : round(p_pico, 2),
+            "factor_capacidad_pct": round(fc, 2),
+        })
+
+    df_gen = pd.DataFrame(rows)
+    df_gen["gen_key"] = df_gen["gen_key"].astype(str)
+    df_gen = df_gen.merge(gen_meta, on="gen_key", how="left")
+
+    cols_gen = ["gen_key", "bus_name_origen", "nombre_geosadi", "carrier", "bus",
+                "p_nom_mw", "energia_total_mwh", "potencia_promedio_mw",
+                "potencia_pico_mw", "factor_capacidad_pct"]
+    df_gen = df_gen[cols_gen].sort_values("energia_total_mwh", ascending=False)
+
+    out_gen = os.path.join(OUTPUT_RESULTS_DIR, f"results_generators_{sufijo}.csv")
+    df_gen.to_csv(out_gen, index=False)
+    print(f"  Generadores : {out_gen}  ({len(df_gen)} filas)")
+
+    # --- Lineas ---
+    if n.lines_t.p0.empty:
+        print("  Lineas      : sin datos de flujo — omitido")
+        return
+
+    p0_abs = n.lines_t.p0.abs()
+    s_nom  = n.lines["s_nom"].replace(0, np.nan)
+    util   = p0_abs.divide(s_nom, axis=1) * 100
+
+    rows_l = []
+    for line in n.lines.index:
+        if line not in p0_abs.columns:
+            continue
+        sn = n.lines.loc[line, "s_nom"]
+        flujo_serie = p0_abs[line]
+        util_serie  = util[line] if sn > 0 else pd.Series(np.nan, index=p0_abs.index)
+
+        rows_l.append({
+            "line_key"               : line,
+            "s_nom_mva"              : round(sn, 1),
+            "flujo_promedio_mw"      : round(flujo_serie.mean(), 2),
+            "flujo_pico_mw"          : round(flujo_serie.max(), 2),
+            "saturacion_promedio_pct": round(util_serie.mean(), 2) if sn > 0 else None,
+            "saturacion_pico_pct"    : round(util_serie.max(), 2)  if sn > 0 else None,
+            "horas_sobre_90pct"      : int((util_serie > 90).sum()) if sn > 0 else None,
+        })
+
+    df_lines = pd.DataFrame(rows_l)
+
+    # Agregar line_id desde lines_500kv_final.csv si existe
+    lines_meta_path = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/lines_500kv_final.csv"
+    if os.path.isfile(lines_meta_path):
+        lines_meta = pd.read_csv(lines_meta_path)[["line_id", "line_key"]].copy()
+        lines_meta["line_key"] = lines_meta["line_key"].astype(str)
+        df_lines = df_lines.merge(lines_meta, on="line_key", how="left")
+        cols_lines = ["line_id", "line_key", "s_nom_mva", "flujo_promedio_mw",
+                      "flujo_pico_mw", "saturacion_promedio_pct",
+                      "saturacion_pico_pct", "horas_sobre_90pct"]
+    else:
+        cols_lines = ["line_key", "s_nom_mva", "flujo_promedio_mw",
+                      "flujo_pico_mw", "saturacion_promedio_pct",
+                      "saturacion_pico_pct", "horas_sobre_90pct"]
+
+    df_lines = df_lines[cols_lines].sort_values("saturacion_promedio_pct", ascending=False)
+
+    out_lines = os.path.join(OUTPUT_RESULTS_DIR, f"results_lines_{sufijo}.csv")
+    df_lines.to_csv(out_lines, index=False)
+    print(f"  Lineas      : {out_lines}  ({len(df_lines)} filas)")
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -529,6 +642,9 @@ def main():
     output_file = guardar_resultados(n)
     reportar_load_shedding(n)
     reportar_resumen(n)
+
+    print(f"\n[Exportando CSVs de resultados ...]")
+    exportar_resultados(n)
 
     print(f"\n{'='*60}")
     print(f"Corrida completada.")
