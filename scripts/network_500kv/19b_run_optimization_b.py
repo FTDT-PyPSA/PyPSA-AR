@@ -22,9 +22,6 @@ Inputs (externos a GitHub):
 
 Output:
     networks/results_2024b_YYYYMMDD_YYYYMMDD.nc
-    results/results_generators_FECHAS.csv      
-    results/results_lines_FECHAS.csv
-       
 
 Decisiones de modelado:
     - DC OPF lineal: sin perdidas, sin tensiones, solo flujos activos.
@@ -56,6 +53,7 @@ LOADS_FILE    = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/loads_2024.csv"
 COSTOS_FILE   = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/costos_marginales_2024.csv"
 PROFILES_FILE = "/mnt/c/Work/pypsa-ar-sandbox/Official data/gen_profiles_2024b.csv"
 OUTPUT_DIR        = "/mnt/c/Work/pypsa-ar-base/networks"
+VALORES_FILE      = "/mnt/c/Work/pypsa-ar-sandbox/Official data/valores_2024_clean.csv"
 OUTPUT_RESULTS_DIR = "/mnt/c/Work/pypsa-ar-base/results"
 
 # Periodo de simulacion
@@ -209,6 +207,7 @@ def agregar_generadores(n, snapshots):
     # Forzar costo 0 a carriers definidos
     mask_cero = gen["carrier"].isin(CARRIERS_COSTO_CERO)
     gen.loc[mask_cero, "costo_marginal"] = 0.0
+    print(f"  Costo=0 forzado: {mask_cero.sum()} generadores ({', '.join(sorted(CARRIERS_COSTO_CERO))})")
 
     # Generadores sin costo
     sin_costo   = gen["costo_marginal"].isna()
@@ -510,8 +509,21 @@ def reportar_resumen(n):
 
 def exportar_resultados(n):
     """
-    Exporta dos CSVs con los resultados de la corrida
+    Exporta dos CSVs con los resultados de la corrida:
 
+    results_generators_FECHAS.csv
+        Una fila por generador (excluye load shedding).
+        Campos: gen_key, bus_name_origen, nombre_geosadi, carrier, bus,
+                p_nom_mw, energia_total_mwh, potencia_promedio_mw,
+                potencia_pico_mw, factor_capacidad_pct
+        Ordenado por energia_total_mwh descendente.
+
+    results_lines_FECHAS.csv
+        Una fila por linea con datos de flujo y saturacion.
+        Campos: line_id, line_key, s_nom_mva, flujo_promedio_mw,
+                flujo_pico_mw, saturacion_promedio_pct,
+                saturacion_pico_pct, horas_sobre_90pct
+        Ordenado por saturacion_promedio_pct descendente.
     """
     os.makedirs(OUTPUT_RESULTS_DIR, exist_ok=True)
     ini = pd.Timestamp(FECHA_INICIO).strftime("%Y%m%d")
@@ -612,6 +624,117 @@ def exportar_resultados(n):
     print(f"  Lineas      : {out_lines}  ({len(df_lines)} filas)")
 
 
+
+# =============================================================================
+# COMPARATIVA MODELO VS REAL CAMMESA
+# =============================================================================
+
+def comparar_vs_real(n):
+    """
+    Lee valores_2024_clean.csv para el mismo periodo de la corrida y compara
+    la energia generada por tecnologia (carrier) en el modelo vs la real CAMMESA.
+
+    El mapeo de TIPO CAMMESA a carrier del modelo es aproximado:
+        Hidraulica / Hidraulica renovable → hydro
+        Turbina a gas / Ciclos Combinados → ocgt / ccgt  (agrupados como termica)
+        Vapor / Turbovapor                → steam        (agrupado como termica)
+        Motor Diesel                      → diesel       (agrupado como termica)
+        Nuclear                           → nuclear
+        Eolica                            → wind
+        Solar                             → solar
+        Biomasa                           → biomass      (agrupado como biocombustibles)
+        Biogas                            → biogas       (agrupado como biocombustibles)
+    """
+    print(f"\n{'='*60}")
+    print(f"COMPARATIVA MODELO VS REAL CAMMESA")
+    print(f"{'='*60}")
+
+    if not os.path.isfile(VALORES_FILE):
+        print(f"  [AVISO] No se encontro valores_2024_clean.csv — comparativa omitida.")
+        return
+
+    ts_inicio = pd.Timestamp(FECHA_INICIO)
+    ts_fin    = pd.Timestamp(FECHA_FIN) + pd.Timedelta(hours=23)
+
+    # Leer solo las columnas necesarias en chunks para no cargar todo en memoria
+    chunks = []
+    for chunk in pd.read_csv(
+        VALORES_FILE,
+        usecols=["datetime", "TIPO", "ENERGIA", "flag_outlier"],
+        chunksize=500_000,
+        low_memory=False,
+    ):
+        chunk = chunk[chunk["flag_outlier"] == False].copy()
+        chunk["ts"] = pd.to_datetime(chunk["datetime"], dayfirst=True, format="%d/%m/%Y %H:%M")
+        chunk = chunk[(chunk["ts"] >= ts_inicio) & (chunk["ts"] <= ts_fin)]
+        if not chunk.empty:
+            chunks.append(chunk[["TIPO", "ENERGIA"]])
+
+    if not chunks:
+        print(f"  [AVISO] Sin datos reales para el periodo {FECHA_INICIO} - {FECHA_FIN}.")
+        return
+
+    real = pd.concat(chunks, ignore_index=True)
+
+    # Mapear TIPO CAMMESA a grupos del modelo
+    # XM = importaciones internacionales
+    TIPO_A_GRUPO = {
+        "Hidraulica"            : "hydro",
+        "Hidraulica renovable"  : "hydro",
+        "Turbina a gas"         : "termica",
+        "Ciclos Combinados"     : "termica",
+        "Vapor"                 : "termica",
+        "Turbovapor"            : "termica",
+        "Motor Diesel"          : "termica",
+        "Nuclear"               : "nuclear",
+        "Eolica"                : "wind",
+        "Solar"                 : "solar",
+        "Biomasa"               : "biocombustibles",
+        "Biogas"                : "biocombustibles",
+        "XM"                    : "importacion",
+    }
+
+    real["grupo"] = real["TIPO"].map(TIPO_A_GRUPO).fillna("otros")
+    real_mwh  = real.groupby("grupo")["ENERGIA"].sum()
+    real_total = real_mwh.sum()
+
+    # Energia modelo por grupo (incluyendo importacion Brasil si hubo)
+    gen_p       = n.generators_t.p
+    gens_reales = [c for c in gen_p.columns if not c.startswith("loadshed_")]
+    carriers    = n.generators.loc[gens_reales, "carrier"]
+
+    modelo_grupos = carriers.map(
+        lambda c: "termica"         if c in CARRIERS_TERMICA else
+                  "hydro"           if c in CARRIERS_HYDRO   else
+                  "biocombustibles" if c in {"biomass","biogas"} else c
+    )
+    modelo_mwh = gen_p[gens_reales].sum().groupby(modelo_grupos).sum()
+
+    # Agregar importacion Brasil desde links
+    if BRASIL_LINK in n.links_t.p0.columns:
+        imp_brasil = n.links_t.p0[BRASIL_LINK].clip(lower=0).sum()
+        if imp_brasil > 0:
+            modelo_mwh["importacion"] = modelo_mwh.get("importacion", 0) + imp_brasil
+
+    modelo_total = modelo_mwh.sum()
+
+    # Todos los grupos presentes en cualquiera de los dos
+    todos_grupos = sorted(set(list(real_mwh.index) + list(modelo_mwh.index)))
+
+    print(f"\n  {'Tecnologia':<20} {'Modelo MWh':>13} {'Modelo %':>9} {'Real MWh':>13} {'Real %':>9} {'Dif %pts':>9}")
+    print(f"  {'-'*20} {'-'*13} {'-'*9} {'-'*13} {'-'*9} {'-'*9}")
+
+    for g in todos_grupos:
+        m_mwh = modelo_mwh.get(g, 0)
+        r_mwh = real_mwh.get(g, 0)
+        m_pct = m_mwh / modelo_total * 100 if modelo_total > 0 else 0
+        r_pct = r_mwh / real_total    * 100 if real_total    > 0 else 0
+        dif   = m_pct - r_pct
+        print(f"  {g:<20} {m_mwh:>13,.0f} {m_pct:>8.1f}% {r_mwh:>13,.0f} {r_pct:>8.1f}% {dif:>+8.1f}%")
+
+    print(f"  {'-'*20} {'-'*13} {'-'*9} {'-'*13} {'-'*9} {'-'*9}")
+    print(f"  {'TOTAL':<20} {modelo_total:>13,.0f} {'100.0%':>9} {real_total:>13,.0f} {'100.0%':>9}")
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -645,6 +768,8 @@ def main():
 
     print(f"\n[Exportando CSVs de resultados ...]")
     exportar_resultados(n)
+
+    comparar_vs_real(n)
 
     print(f"\n{'='*60}")
     print(f"Corrida completada.")
