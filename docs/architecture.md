@@ -1,59 +1,58 @@
 # PyPSA-AR Architecture
 
-## Objetivo
+## Objective
 
-Construir un modelo calibrado y reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
+Build a calibrated and reproducible model of the Argentine high-voltage power grid using PyPSA.
 
-La estrategia es construir la red nivel por nivel, validando cada uno antes de incorporar el siguiente.
-La red 500 kV es el backbone del SADI y el punto de partida.
-
----
-
-## Scope del modelo
-
-**v0.1 — Red 500 kV completa (estado actual):**
-- Todos los buses 500 kV y sus buses secundarios (lado bajo de transformadores)
-- Líneas con impedancias reales del PSS/E (r, x, b en pu, Sbase=100 MVA)
-- Compensadores serie identificados y modelados como Line con x negativo
-- Transformadores de 3 devanados descompuestos en 2 × 2W con bus 500 kV como referencia
-- Fusión de acopladores de barra (series_compensator con r=0): buses internos colapsados
-  al representante del grupo antes de construir el network
-- Interconexión Argentina-Brasil: bus ficticio BRASIL, línea RINCON-GARABI-1 con datos
-  reales PSS/E, Link `importacion_brasil` (p_nom=2200 MW, marginal_cost=110 USD/MWh,
-  solo importación)
-- 626 unidades generadoras con p_nom desde datos reales CAMMESA 2024 (~577 con perfil
-  horario — las restantes sin match en CAMMESA se excluyen del network al optimizar)
-- Demanda horaria 2024 por bus (72 buses, 8784 horas)
-- Perfiles de disponibilidad horaria (p_max_pu) para todas las unidades con match en CAMMESA
-- Costos marginales fijos anuales por unidad (~433 con costo asignado, ~171 con costo=0)
-- Versiones clusterizadas de la red para K=10, K=20, K=50 (clustering k-means geográfico)
-
-**v0.2 y siguientes:**
-- Incorporar niveles 220, 330, 132 kV uno a uno
-- Transformadores inter-nivel
-- Generación y demanda completas
-
-**Fuera de scope:**
-- Distribución (MT/BT)
+The strategy is to build the network level by level, validating each one before incorporating the next.
+The 500 kV network is the backbone of the SADI and the starting point.
 
 ---
 
-## Fuentes de datos
+## Model scope
 
-| Componente | Fuente | Formato |
-|------------|--------|---------|
-| Topología e impedancias | PSS/E ver2526pid.raw (CAMMESA) | .raw |
-| Coordenadas de buses | GeoSADI — estaciones_transformadoras | .geojson |
-| Geometría de líneas | GeoSADI — lineas_alta_tension | .geojson |
-| Generación horaria 2024 | CAMMESA — VALORES_2024.csv | .csv |
-| Demanda horaria 2024 | Archivo interno — Dda_horaria_x_trafo_2024.csv | .csv |
-| Costos marginales | CAMMESA — CVP_Termica.csv + CVP_renovar.csv | .csv |
+**v0.1 — Complete 500 kV network (current state):**
+- All 500 kV buses and their secondary buses (transformer low-side)
+- Lines with real PSS/E impedances (r, x, b in pu, Sbase=100 MVA)
+- Series compensators identified and modeled as Line with negative x
+- 3-winding transformers decomposed into 2 × 2W with the 500 kV bus as reference
+- Bus coupler fusion (series_compensator with r=0): internal buses collapsed
+  to the group representative before building the network
+- Argentina–Brazil interconnection: fictitious BRASIL bus, RINCON-GARABI-1 line with
+  real PSS/E data, Link `importacion_brasil` (p_nom=2200 MW, marginal_cost=110 USD/MWh,
+  import only)
+- 626 generator units with p_nom from real CAMMESA 2024 data (~577 with hourly profile —
+  the remaining units without a CAMMESA match are excluded from the network at optimization time)
+- 2024 hourly demand per bus (72 buses, 8784 hours)
+- Hourly availability profiles (p_max_pu) for all units with a CAMMESA match
+- Fixed annual marginal costs per unit (~433 with assigned cost)
+
+**v0.2 and beyond:**
+- Incorporate 220, 330, 132 kV levels one by one
+- Inter-level transformers
+- Complete generation and demand
+
+**Out of scope:**
+- Distribution (MV/LV)
+
+---
+
+## Data sources
+
+| Component | Source | Format |
+|-----------|--------|--------|
+| Topology and impedances | PSS/E ver2526pid.raw (CAMMESA) | .raw |
+| Bus coordinates | GeoSADI — estaciones_transformadoras | .geojson |
+| Line geometry | GeoSADI — lineas_alta_tension | .geojson |
+| 2024 hourly generation | CAMMESA — VALORES_2024.csv | .csv |
+| 2024 hourly demand | Internal file — Dda_horaria_x_trafo_2024.csv | .csv |
+| Marginal costs | CAMMESA — CVP_Termica.csv + CVP_renovar.csv | .csv |
 
 GeoSADI: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
 
 ---
 
-## Pipeline de construcción
+## Construction pipeline
 
 ```
 PSS/E .raw ──→ 01_parse_raw_buses.py          ──→ buses_500kv_raw.csv
@@ -67,7 +66,7 @@ GeoSADI ────→ 05_match_geosadi_coords.py      ──→ buses_final.cs
               07_validate_topology.py          ──→ topology_report.csv
               07b_export_qgis.py               ──→ red_500kv_qgis.gpkg
                         │
-              08_build_pypsa_network.py        ──→ network_500kv.nc
+              08_build_network.py              ──→ network_500kv.nc
                         │
               09_map_generators.py             ──→ generators_mapped.csv
               10_map_loads.py                  ──→ loads_mapped.csv
@@ -75,108 +74,95 @@ GeoSADI ────→ 05_match_geosadi_coords.py      ──→ buses_final.cs
               11_add_geo_to_generators.py      ──→ generators_readypypsa.csv
               12_build_generators_final.py     ──→ generators_final.csv
               12b_export_qgis_generators.py    ──→ layer centrales en .gpkg
-              12c_test_snapshot.py             ──→ (validación — sin output)
                         │
 CAMMESA ────→ 13_clean_valores_2024.py        ──→ valores_2024_clean.csv *
-              14_detectar_conflictos.py        ──→ conflictos_psse_cammesa.csv
+              14_detect_generator_conflicts.py ──→ conflicts_psse_cammesa.csv
               14b_build_generators_2024.py     ──→ generators_2024.csv
               15_build_loads_2024.py           ──→ loads_2024.csv
-              16_snapshot_dc_pico2024.py       ──→ (validación DC — sin output)
+              16_snapshot_dc_peak2024.py       ──→ (DC validation — no output)
               17_build_gen_profiles_2024.py    ──→ gen_profiles_2024.csv *
                         │
-CVP CAMMESA → 18_diagnostico_costos.py        ──→ 18_costos_marginales_diagnostico.csv
-              18B_build_costos_marginales.py   ──→ costos_marginales_2024.csv
+CVP CAMMESA → 18_diagnose_marginal_costs.py   ──→ marginal_costs_diagnostic.csv
+              18b_build_marginal_costs_2024.py ──→ marginal_costs_2024.csv
                         │
               19_run_optimization.py           ──→ results_2024_*.nc *
-              20_analyze_results.py            ──→ (pendiente)
-                        │
-              21_network_clustering.py         ──→ clusters.gpkg
-                                                   cluster_summary_k{N}.csv
-                                                   cluster_k{N}.nc *
-
-* Archivos externos a GitHub por tamaño
+          
+* Files external to GitHub due to size
 ```
 
 ---
 
-## Capas del modelo PyPSA
+## PyPSA model layers
 
-### 1. Red física
-- Buses 500 kV con coordenadas GeoSADI y nivel de tensión
-- Buses secundarios heredando coordenadas del bus 500 kV padre
-- Líneas con r, x, b, s_nom (desde ratea_mva del PSS/E)
-- Compensadores serie como Line con x negativo
-- Transformadores con x, s_nom
-- Link `importacion_brasil`: p_nom=2200 MW, solo importación (p_min_pu=0), marginal_cost=110 USD/MWh
+### 1. Physical network
+- 500 kV buses with GeoSADI coordinates and voltage level
+- Secondary buses inheriting coordinates from their 500 kV parent bus
+- Lines with r, x, b, s_nom (from ratea_mva in PSS/E)
+- Series compensators as Line with negative x
+- Transformers with x, s_nom
+- Link `importacion_brasil`: p_nom=2200 MW, import only (p_min_pu=0), marginal_cost=110 USD/MWh
 
-### 2. Generación
-- ~577 unidades generadoras activas en el network (626 totales; ~49 excluidas por no tener match en CAMMESA)
-- `p_nom` por unidad: percentil 95 de POT_DISP anual CAMMESA 2024, distribuido
-  proporcionalmente al pt_mw del PSS/E entre las unidades de cada central
-- `p_max_pu` horario: ENERGIA/p_nom para solar, eólica, biogas y biomass;
-  POT_DISP/p_nom para el resto
+### 2. Generation
+- ~577 active generator units in the network (626 total; ~49 excluded for having no CAMMESA match)
+- `p_nom` per unit: 95th percentile of annual CAMMESA 2024 POT_DISP, distributed
+  proportionally to the PSS/E pt_mw among the units of each plant
+- `p_max_pu` hourly: ENERGIA/p_nom for solar, wind, biogas and biomass;
+  POT_DISP/p_nom for the rest
 - Carriers: ocgt, steam, ccgt, hydro, nuclear, wind, solar, diesel, biogas, biomass, pumped_hydro
-- `marginal_cost` por unidad: desde `costos_marginales_2024.csv` (~433 con valor; ~171 con costo=0)
+- `marginal_cost` per unit: from `marginal_costs_2024.csv` (~433 with value)
 
-### 3. Demanda
-- Perfiles horarios 8784h (año 2024, bisiesto)
-- 72 buses con demanda asignada
-- Fuente: Dda_horaria_x_trafo_2024.csv — demanda por transformador de distribución
+### 3. Demand
+- Hourly profiles 8784h (year 2024, leap year)
+- 72 buses with assigned demand
+- Source: Dda_horaria_x_trafo_2024.csv — demand by distribution transformer
 
-### 4. Validación
-- Flujo DC linealizado (n.lpf()) sobre snapshot de pico de demanda (01/02/2024 14:00)
-- Slack bus: ATUCHA 2_21kV (bus 2620, terminal de máquina nuclear, referencia del PSS/E)
+### 4. Validation
+- Linearized DC flow (n.lpf()) on the peak demand snapshot (01/02/2024 14:00)
+- Slack bus: ATUCHA 2_21kV (bus 2620, nuclear machine terminal, PSS/E reference)
 
-### 5. Optimización
-- `n.optimize()` DC lineal con solver HiGHS
-- Objetivo: minimizar costo total de generación sujeto a restricciones de red y capacidad
-- Sin restricciones adicionales en esta versión: sin mínimos técnicos ni rampas
-- Load shedding virtual en cada bus (costo=10.000 USD/MWh) para garantizar factibilidad
-- Período configurable: parámetros `FECHA_INICIO`, `FECHA_FIN`, `CHUNK_DIAS`
+### 5. Optimization
+- `n.optimize()` linear DC with HiGHS solver
+- Objective: minimize total generation cost subject to network and capacity constraints
+- No additional constraints in this version: no minimum technical outputs or ramp rates
+- Virtual load shedding at each bus (cost=10,000 USD/MWh) to guarantee feasibility
+- Configurable period: `START_DATE`, `END_DATE`, `CHUNK_DAYS` parameters
 - Output: `results_2024_YYYYMMDD_YYYYMMDD.nc`
 
-### 6. Clustering
-- Clustering k-means geográfico nativo de PyPSA (`kmeans_clustering`)
-- Niveles configurables: parámetro `CLUSTER_SIZES`
-- Criterio de pesos configurable: `BUS_WEIGHTING` — uniforme / p_nom / demanda
-- Cada network clusterizado queda funcional para `n.optimize()` futura
-- Output: `clusters.gpkg` + `cluster_summary_k{N}.csv` + `cluster_k{N}.nc`
+---
+
+## Modeling decisions
+
+### Network
+- Impedances in pu (Sbase=100 MVA confirmed in PSS/E header)
+- Conversion to physical units: Z_base = baskv² / S_base per line
+- Bus couplers fused in memory — original CSVs are not modified
+- s_nom from PSS/E ratea_mva (operational thermal rating; may be conservative
+  relative to the conductor's actual thermal capacity)
+
+### Generation
+- p_nom from 95th percentile of POT_DISP — avoids outliers without discarding real peaks
+- Yacyretá: CAMMESA reports the entire plant; distributed by p_nom across the 20 units
+- Salto Grande (SGDE): factor 0.5 on POT_DISP (binational plant Argentina/Uruguay)
+- Units without a CAMMESA match (self-producers, outside the MEM): excluded from the network
+- International imports (Brazil): modeled as Link with a fixed reference cost
+
+### Marginal costs
+- Fixed annual cost per unit (does not vary by hour or fuel in this version)
+- Thermal/nuclear: from CAMMESA CVP_Termica, filter year 2026 week 1
+- Renewables: annual average from CAMMESA CVP_renovar 2024
+- Hydro pending of costs until but capped to maximum actual production of each day until better ways of modelling are implemented.
+
+### DC flow
+- Standard DC approximation: no losses, small angles
+- The slack absorbs the generation/demand imbalance (difference between dispatched p_set
+  and total demand, mainly explained by unmodeled imports)
 
 ---
 
-## Decisiones de modelado
+## Design principles
 
-### Red
-- Impedancias en pu (Sbase=100 MVA confirmado en encabezado del PSS/E)
-- Conversión a unidades físicas: Z_base = baskv² / S_base por línea
-- Acopladores de barra fusionados en memoria — los CSVs originales no se modifican
-- s_nom desde ratea_mva del PSS/E (rating térmico operativo, puede ser conservador
-  respecto a la capacidad térmica real del conductor)
-
-### Generación
-- p_nom desde percentil 95 de POT_DISP — evita outliers sin descartar picos reales
-- Yacyretá: CAMMESA reporta la central entera; se distribuye por p_nom entre las 20 unidades
-- Salto Grande (SGDE): factor 0.5 sobre POT_DISP (central binacional Argentina/Uruguay)
-- Unidades sin match en CAMMESA (autoproductores, fuera del MEM): excluidas del network
-- Importaciones internacionales (Brasil): modeladas como Link con costo fijo de referencia
-
-### Costos marginales
-- Costo fijo anual por unidad (no varía por hora ni por combustible en esta versión)
-- Térmica/nuclear: desde CVP_Termica CAMMESA, filtro año 2026 semana 1
-- Renovables: promedio anual de CVP_renovar CAMMESA 2024
-- Hidro pendiente: costo=0 hasta completar el archivo de diagnóstico manualmente
-
-### Flujo DC
-- Aproximación DC estándar: sin pérdidas, ángulos pequeños
-- El slack absorbe el desbalance generación/demanda (diferencia entre p_set despachado
-  y demanda total, explicada principalmente por importaciones no modeladas)
-
----
-
-## Principios de diseño
-
-- **Reproducibilidad**: todo el pipeline es scripteable desde el .raw hasta el .nc
-- **Fuentes primarias**: GeoSADI + PSS/E son la fuente de verdad, no OSM
-- **Modularidad**: cada nivel de tensión se construye y valida por separado
-- **Git liviano**: solo scripts, documentación y CSVs de data procesada. Sin .nc ni archivos pesados
-- **Flexibilidad**: parámetros configurables en la sección CONFIGURACION de cada script — sin modificar lógica
+- **Reproducibility**: the entire pipeline is scriptable from the .raw to the .nc
+- **Primary sources**: GeoSADI + PSS/E are the source of truth, not OSM
+- **Modularity**: each voltage level is built and validated separately
+- **Lightweight git**: only scripts, documentation and processed CSVs. No .nc or large files
+- **Flexibility**: configurable parameters in the CONFIGURATION section of each script — without modifying logic

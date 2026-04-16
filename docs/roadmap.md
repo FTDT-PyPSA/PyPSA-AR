@@ -1,137 +1,116 @@
 # PyPSA-AR Roadmap
 
-Objetivo: modelo calibrado y reproducible de la red eléctrica argentina usando PyPSA.
+Objective: calibrated and reproducible model of the Argentine power grid using PyPSA.
 
-Estrategia de construcción: arrancar con la red 500 kV completa y cerrarla antes de
-incorporar niveles de tensión inferiores. Cada nivel se valida antes de avanzar al siguiente.
-
----
-
-## Fase 0 — Repositorio y estructura ✅ COMPLETADA
-
-- Repositorio GitHub inicializado
-- Estructura de carpetas definida
-- Documentación base creada
-- Entorno reproducible configurado (pypsa-earth-lock en WSL)
+Construction strategy: start with the complete 500 kV network and close it before
+incorporating lower voltage levels. Each level is validated before moving to the next.
 
 ---
 
-## Fase 1 — Auditoría PyPSA-Earth para Argentina ✅ COMPLETADA
+## Phase 0 — Repository and structure ✅ COMPLETED
 
-Objetivo: entender qué modelaba PyPSA-Earth para AR y decidir si reutilizar o reemplazar.
-
-Resultado: se decidió reemplazar toda la data de OSM por GeoSADI + PSS/E.
-Razones documentadas en `docs/aprendizaje_pypsaearth_ar.md`.
-
-Hallazgos clave:
-- PyPSA-Earth tiene 125 transformadores vs 1.132 reales (11% cobertura)
-- Líneas 500 kV con tipo de conductor europeo (380 kV)
-- Sin impedancias activas (r=0, x=0)
+- GitHub repository initialized
+- Folder structure defined
+- Base documentation created
+- Reproducible environment configured (pypsa-earth-lock on WSL)
 
 ---
 
-## Fase 2 — Construcción red 500 kV ✅ COMPLETADA
+## Phase 1 — PyPSA-Earth audit for Argentina ✅ COMPLETED
 
-Fuentes: GeoSADI (geometría) + PSS/E ver2526pid.raw (topología e impedancias)
+Objective: understand what PyPSA-Earth modeled for AR and decide whether to reuse or replace.
 
-| Script | Descripción | Estado |
+Result: decision made to replace all OSM data with GeoSADI + PSS/E.
+Reasons documented in `docs/aprendizaje_pypsaearth_ar.md`.
+
+Key findings:
+- PyPSA-Earth has 125 transformers vs 1,132 real ones (11% coverage)
+- 500 kV lines using European conductor type (380 kV)
+- No active impedances (r=0, x=0)
+
+---
+
+## Phase 2 — 500 kV network construction ✅ COMPLETED
+
+Sources: GeoSADI (geometry) + PSS/E ver2526pid.raw (topology and impedances)
+
+| Script | Description | Status |
 |--------|-------------|--------|
-| `01_parse_raw_buses.py` | Extrae buses 500 kV del PSS/E | ✅ |
-| `02_parse_raw_lines.py` | Extrae líneas 500 kV del PSS/E | ✅ |
-| `03_parse_raw_transformers.py` | Extrae transformadores con lado en 500 kV | ✅ |
-| `04_parse_raw_buses_sec.py` | Extrae buses secundarios de los transformadores | ✅ |
-| `05_match_geosadi_coords.py` | Asigna coordenadas y consolida todos los buses | ✅ |
-| `06_match_geosadi_geometry.py` | Asigna geometría WKT a líneas | ✅ |
-| `07_validate_topology.py` | Valida topología de la red | ✅ |
-| `07b_export_qgis.py` | Exporta a GeoPackage para QGIS | ✅ |
-| `08_build_pypsa_network.py` | Construye objeto PyPSA Network | ✅ |
+| `01_parse_raw_buses.py` | Extracts 500 kV buses from PSS/E | ✅ |
+| `02_parse_raw_lines.py` | Extracts 500 kV lines from PSS/E | ✅ |
+| `03_parse_raw_transformers.py` | Extracts transformers with a 500 kV winding | ✅ |
+| `04_parse_raw_buses_sec.py` | Extracts secondary buses from transformers | ✅ |
+| `05_match_geosadi_coords.py` | Assigns coordinates and consolidates all buses | ✅ |
+| `06_match_geosadi_geometry.py` | Assigns WKT geometry to lines | ✅ |
+| `07_validate_topology.py` | Validates network topology | ✅ |
+| `07b_export_qgis.py` | Exports to GeoPackage for QGIS | ✅ |
+| `08_build_network.py` | Builds the PyPSA Network object | ✅ |
 
-Estado de la red 500 kV:
-- 95 buses 500 kV + 249 buses secundarios = 344 buses en el network
-- 103 líneas activas (incluye compensadores serie)
-- 300 transformadores
-- Fusión de acopladores de barra aplicada: 17 buses fusionados al representante del grupo
-- 1 componente conexa, 0 buses aislados
-- Interconexión Argentina-Brasil incluida: Link `importacion_brasil` (p_nom=2200 MW)
+500 kV network status:
+- 95 500 kV buses + 249 secondary buses = 344 buses in the network
+- 103 active lines (including series compensators)
+- 300 transformers
+- Bus coupler fusion applied: 17 buses merged to their group representative
+- 1 connected component, 0 isolated buses
+- Argentina–Brazil interconnection included: Link `importacion_brasil` (p_nom=2200 MW)
 
 ---
 
-## Fase 3 — Generación y demanda 500 kV ✅ COMPLETADA
+## Phase 3 — Generation and demand 500 kV ✅ COMPLETED
 
-Objetivo: incorporar generación y demanda reales 2024 al modelo y validar con flujo DC.
+Objective: incorporate real 2024 generation and demand into the model and validate with DC flow.
 
-| Script | Descripción | Estado |
+| Script | Description | Status |
 |--------|-------------|--------|
-| `09_map_generators.py` | Mapea generadores PSS/E → nodos del modelo | ✅ |
-| `10_map_loads.py` | Mapea cargas PSS/E → nodos del modelo | ✅ |
-| `10b_visualize_qgis.py` | Exporta balance generación/carga a QGIS | ✅ |
-| `11_add_geo_to_generators.py` | Asigna coordenadas GeoSADI a generadores | ✅ |
-| `12_build_generators_final.py` | Tabla definitiva de generadores para PyPSA | ✅ |
-| `12b_export_qgis_generators.py` | Agrega layer de centrales al GeoPackage | ✅ |
-| `12c_test_snapshot.py` | Validación power flow Newton-Raphson con snapshot PSS/E | ✅ |
-| `13_clean_valores_2024.py` | Limpieza y normalización de VALORES_2024.csv | ✅ |
-| `14_detectar_conflictos_generadores.py` | Detecta discrepancias PSS/E vs CAMMESA | ✅ |
-| `14b_build_generators_2024.py` | Generadores con p_nom real 2024 desde CAMMESA | ✅ |
-| `15_build_loads_2024.py` | Demanda horaria 2024 por bus en formato largo | ✅ |
-| `16_snapshot_dc_pico2024.py` | Validación DC en snapshot de pico de demanda | ✅ |
-| `17_build_gen_profiles_2024.py` | Perfiles horarios de disponibilidad (p_max_pu) | ✅ |
+| `09_map_generators.py` | Maps PSS/E generators → model buses | ✅ |
+| `10_map_loads.py` | Maps PSS/E loads → model buses | ✅ |
+| `10b_visualize_qgis.py` | Exports generation/load balance to QGIS | ✅ |
+| `11_add_geo_to_generators.py` | Assigns GeoSADI coordinates to generators | ✅ |
+| `12_build_generators_final.py` | Definitive generator table for PyPSA | ✅ |
+| `12b_export_qgis_generators.py` | Adds power plant layer to GeoPackage | ✅ |
+| `13_clean_valores_2024.py` | Cleaning and normalization of VALORES_2024.csv | ✅ |
+| `14_detect_generator_conflicts.py` | Detects PSS/E vs CAMMESA mismatches | ✅ |
+| `14b_build_generators_2024.py` | Generators with real 2024 p_nom from CAMMESA | ✅ |
+| `15_build_loads_2024.py` | 2024 hourly demand per bus in long format | ✅ |
+| `16_snapshot_dc_peak2024.py` | DC validation at peak demand snapshot | ✅ |
+| `17_build_gen_profiles_2024.py` | Hourly availability profiles (p_max_pu) | ✅ |
 
-Resultados del snapshot de validación (01/02/2024 14:00 — pico de demanda 2024):
-- Generación despachada: 26.374 MW | Inyección del slack: 1.013 MW | Demanda: 27.439 MW
-- Brecha generación/demanda explicada por importaciones de Brasil (~2.267 MW, no modeladas)
-- Mix: 59% térmica, 26% hidro, 8% nuclear, 5% eólica, 4% solar
-- 1 línea al 133% de su rating (C.COSTA-P.BAND.-1) — congestión consistente con la
-  limitación de modelar solo red 500 kV sin los paralelos de niveles inferiores
+Validation snapshot results (01/02/2024 14:00 — 2024 peak demand):
+- Dispatched generation: 26,374 MW | Slack injection: 1,013 MW | Demand: 27,439 MW
+- Generation/demand gap explained by Brazilian imports (~2,267 MW, not modeled)
+- Mix: 59% thermal, 26% hydro, 8% nuclear, 5% wind, 4% solar
+- 1 line at 133% of its rating (C.COSTA-P.BAND.-1) — congestion consistent with expected as line has lower MVA than the normal for a 500kV line.
 
 ---
 
-## Fase 4 — Costos marginales y optimización ⚠️ EN CURSO
+## Phase 4 — Marginal costs and optimization ✅ COMPLETED
 
-Objetivo: incorporar costos marginales, correr el despacho económico 2024 y analizar resultados.
+Objective: incorporate marginal costs, run the 2024 economic dispatch and analyze results.
 
-| Script | Descripción | Estado |
+| Script | Description | Status |
 |--------|-------------|--------|
-| `18_diagnostico_costos_marginales.py` | Auditoría de cobertura de costos por unidad | ✅ |
-| `18B_build_costos_marginales_2024.py` | Tabla de costos marginales fijos anuales | ✅ |
-| `19_run_optimization.py` | Despacho económico DC (OPF) — `n.optimize()` | ✅ construido, pendiente de correr año completo |
-| `20_analyze_results.py` | Análisis de resultados vs datos reales CAMMESA | 🔲 pendiente |
+| `18_diagnose_marginal_costs.py` | Cost coverage audit per unit | ✅ |
+| `18b_build_marginal_costs_2024.py` | Fixed annual marginal cost table | ✅ |
+| `19_run_optimization.py` | DC economic dispatch (OPF) — `n.optimize()` | ✅ built, full-year run pending |
 
-Notas:
-- Costos pendientes: ~171 unidades (principalmente hidro) con costo=0 hasta que equipo de trabajo complete el archivo de diagnóstico
-- Script 19 parametrizado: período configurable (`FECHA_INICIO`/`FECHA_FIN`), chunking por días (`CHUNK_DIAS`), load shedding virtual para garantizar factibilidad
-- Script 20 levantará el `.nc` de resultados sin recorrer la optimización
+
+Notes:
+- Script 19 parameterized: configurable period (`START_DATE`/`END_DATE`), day chunking (`CHUNK_DAYS`), virtual load shedding to guarantee feasibility
 
 ---
 
-## Fase 4b — Clustering espacial ✅ COMPLETADA
+## Phase 5 — Incorporate 220, 330, 132 kV levels 🔲 NEXT PHASE
 
-Objetivo: generar versiones simplificadas de la red para análisis de largo plazo.
-
-| Script | Descripción | Estado |
-|--------|-------------|--------|
-| `21_network_clustering.py` | Clustering k-means nativo PyPSA | ✅ |
-
-Resultados:
-- Clustering corrido para K=10, K=20, K=50 usando `kmeans_clustering` de PyPSA 0.30.3
-- Criterio actual: pesos uniformes (clustering puramente geográfico)
-- Redes clusterizadas exportadas como `.nc` — funcionales para `n.optimize()` futura
-- Visualización en QGIS: `data/network_500kv/clusters/clusters.qgz`
-- Criterio de agrupamiento alternativo (`BUS_WEIGHTING = "p_nom"` o `"demanda"`) disponible como parámetro configurable
+Same pipeline as 500 kV, level by level.
+Scripts 01–08 are reusable with different voltage filters.
+Incorporate inter-level transformers.
 
 ---
 
-## Fase 5 — Incorporar niveles 220, 330, 132 kV 🔲 PENDIENTE
+## Phase 6 — Expansion scenarios 🔲 PENDING
 
-Mismo pipeline que 500 kV, nivel por nivel.
-Scripts 01–08 son reutilizables con distintos filtros de tensión.
-Incorporar transformadores inter-nivel.
+With the validated base model, run energy policy and network expansion scenarios.
+Requires: validated model (Phase 5), future demand scenario definitions,
+new technology cost curves, and decision on clustering levels to use.
 
----
-
-## Fase 6 — Escenarios de expansión 🔲 PENDIENTE
-
-Con el modelo base validado, correr escenarios de política energética y expansión de red.
-Requiere previamente: modelo calibrado (Fase 4), definición de escenarios de demanda futura,
-curvas de costo de nuevas tecnologías y decisión sobre niveles de clustering a utilizar.
-
-Fecha límite del proyecto: 30/04/2026
+Project deadline: 30/04/2026

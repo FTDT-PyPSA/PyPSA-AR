@@ -1,145 +1,143 @@
-# PyPSA-AR-BASE
+# PyPSA-AR
 
-Modelo reproducible de la red eléctrica argentina de alta tensión usando PyPSA.
+Reproducible model of the Argentine high-voltage power grid using PyPSA.
 
-**Estado actual:** Scripts 01→19 y 21 finalizados. Red 500 kV construida, generación y demanda horaria 2024 incorporadas, costos marginales asignados, despacho económico DC listo para correr, clustering espacial completado.
-**Fecha límite:** 30/04/2026
-
----
-
-## Objetivo
-
-Construir un modelo calibrado del SADI (Sistema Argentino de Interconexión) que permita:
-- Replicar el despacho histórico 2024 contra datos CAMMESA
-- Analizar restricciones de transmisión
-- Servir de base para escenarios de expansión y política energética
-
-Estrategia: construir nivel por nivel (500 kV → 220/330 kV → 132 kV), validando cada uno antes de avanzar.
+**Current status:** Scripts 01–19 complete. 500 kV network built, 2024 hourly generation and demand incorporated, marginal costs assigned, DC economic dispatch validated.
+**Next phase:** PYPSA-AR — integration of 220 kV and 132 kV nodes over the existing 500 kV network.
+**Deadline:** 30/04/2026
 
 ---
 
-## Entorno de trabajo
+## Objective
 
-### Por qué WSL + Windows
+Build a calibrated model of the SADI (Argentine Interconnection System) that allows:
+- Replicating the 2024 historical dispatch against CAMMESA data
+- Analyzing transmission constraints
+- Serving as a base for expansion and energy policy scenarios
 
-El proyecto usa **WSL (Ubuntu)** para ejecutar los scripts y **Windows (Cursor o VSCode)** para editarlos.
-Esta combinación no es accidental:
+Strategy: build level by level (500 kV → 220/330 kV → 132 kV), validating each level before moving on.
 
-- PyPSA y sus dependencias (especialmente solvers lineales) funcionan de forma más estable en Linux
-- El entorno `pypsa-earth-lock` fija las versiones de todas las librerías para garantizar reproducibilidad entre máquinas del equipo
-- Cursor y VSCode en Windows corren en WSL sin fricción
+---
 
-**No usar Python de Windows ni un venv paralelo** — los scripts asumen rutas `/mnt/c/...` y el entorno conda de WSL.
+## Working environment
 
-### Setup del entorno
+### Why WSL + Windows
 
-1. Tener WSL instalado con Ubuntu
-2. Tener miniforge instalado en WSL:
+The project uses **WSL (Ubuntu)** to run the scripts and **Windows (Cursor or VSCode)** to edit them.
+This combination is intentional:
+
+- PyPSA and its dependencies (especially linear solvers) run more stably on Linux
+- The `pypsa-earth-lock` environment pins all library versions to guarantee reproducibility across team machines
+- Cursor and VSCode on Windows integrate with WSL without friction
+
+**Do not use Windows Python or a parallel venv** — the scripts assume the WSL conda environment.
+
+### Environment setup
+
+1. Have WSL installed with Ubuntu.
+
+2. Install miniforge in WSL:
 ```bash
 wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
 bash Miniforge3-Linux-x86_64.sh
 ```
 
-3. Clonar el repo y ubicarse en la raíz:
+3. Clone the repository:
 ```bash
-git clone https://github.com/<tu-org>/pypsa-ar-base.git
-cd pypsa-ar-base
+git clone https://github.com/FTDT-PyPSA/PyPSA-AR.git
+cd PyPSA-AR
 ```
 
-4. Crear el entorno desde el archivo del repo:
+4. Create the environment from the repo file:
 ```bash
 conda env create -f environment.yml
-```
-
-5. Activar el entorno:
-```bash
 conda activate pypsa-earth-lock
 ```
 
-6. Verificar el Python correcto:
+5. Verify the correct Python:
 ```bash
 which python
-# debe mostrar: /home/<user>/miniforge3/envs/pypsa-earth-lock/bin/python
+# should show: /home/<user>/miniforge3/envs/pypsa-earth-lock/bin/python
 ```
 
-### Correr el pipeline 500 kV
+### Configure paths
 
-Los scripts se ejecutan desde WSL en orden. Reemplazá `<ruta-al-repo>` con la ruta local al repo
-(ej: `/mnt/c/Work/pypsa-ar-base`) y `<ruta-oficial-data>` con la ruta al directorio de datos externos
-(ej: `/mnt/c/Work/pypsa-ar-sandbox/Official data`):
+Before running any script, edit **`config.yaml`** at the repo root:
+
+```yaml
+repo_dir:          /local/path/to/repo        # root of the cloned repo
+external_data_dir: /path/to/external_data
+```
+
+External data files (CAMMESA, GeoSADI, PSS/E, CVP) are downloaded from:
+
+> **https://github.com/FTDT-PyPSA/PyPSA-AR/releases/tag/v1.0-data**
+
+Extract them maintaining the folder structure indicated in the release notes.
+Once `config.yaml` is configured, no script requires path editing.
+
+---
+
+## 500 kV pipeline
+
+All scripts are run from the repository root, in order:
 
 ```bash
-# Construcción de la red 500 kV
-python <ruta-al-repo>/scripts/network_500kv/01_parse_raw_buses.py
-python <ruta-al-repo>/scripts/network_500kv/02_parse_raw_lines.py
-python <ruta-al-repo>/scripts/network_500kv/03_parse_raw_transformers.py
-python <ruta-al-repo>/scripts/network_500kv/04_parse_raw_buses_sec.py
-python <ruta-al-repo>/scripts/network_500kv/05_match_geosadi_coords.py
-python <ruta-al-repo>/scripts/network_500kv/06_match_geosadi_geometry.py
-python <ruta-al-repo>/scripts/network_500kv/07_validate_topology.py
-python <ruta-al-repo>/scripts/network_500kv/07b_export_qgis.py
-python <ruta-al-repo>/scripts/network_500kv/08_build_pypsa_network.py
+# 500 kV network construction
+python scripts/network_500kv/01_parse_raw_buses.py
+python scripts/network_500kv/02_parse_raw_lines.py
+python scripts/network_500kv/03_parse_raw_transformers.py
+python scripts/network_500kv/04_parse_raw_buses_sec.py
+python scripts/network_500kv/05_match_geosadi_coords.py
+python scripts/network_500kv/06_match_geosadi_geometry.py
+python scripts/network_500kv/07_validate_topology.py
+python scripts/network_500kv/07b_export_qgis.py
+python scripts/network_500kv/08_build_network.py
 
-# Mapeo de generación y demanda
-python <ruta-al-repo>/scripts/network_500kv/09_map_generators.py
-python <ruta-al-repo>/scripts/network_500kv/10_map_loads.py
-python <ruta-al-repo>/scripts/network_500kv/10b_visualize_qgis.py
-python <ruta-al-repo>/scripts/network_500kv/11_add_geo_to_generators.py
-# → completar generators_pendingmanualpypsa.csv antes de continuar,
-#   o usar generators_manualpypsa.csv ya versionado en data/network_500kv/
-python <ruta-al-repo>/scripts/network_500kv/12_build_generators_final.py
-python <ruta-al-repo>/scripts/network_500kv/12b_export_qgis_generators.py
-python <ruta-al-repo>/scripts/network_500kv/12c_test_snapshot.py  # validación power flow PSS/E
+# Generation and demand mapping
+python scripts/network_500kv/09_map_generators.py
+python scripts/network_500kv/10_map_loads.py
+python scripts/network_500kv/10b_visualize_qgis.py
+python scripts/network_500kv/11_add_geo_to_generators.py
+# → complete generators_pendingmanualpypsa.csv before continuing,
+#   or use generators_manualpypsa.csv already versioned in data/network_500kv/
+python scripts/network_500kv/12_build_generators_final.py
+python scripts/network_500kv/12b_export_qgis_generators.py
 
-# Datos reales 2024 — requieren archivos externos (no versionados en git)
-python <ruta-al-repo>/scripts/network_500kv/13_clean_valores_2024.py
-python <ruta-al-repo>/scripts/network_500kv/14_detectar_conflictos_generadores.py
-# → completar conflictos_psse_cammesa.csv antes de continuar
-python <ruta-al-repo>/scripts/network_500kv/14b_build_generators_2024.py
-python <ruta-al-repo>/scripts/network_500kv/15_build_loads_2024.py
-python <ruta-al-repo>/scripts/network_500kv/16_snapshot_dc_pico2024.py  # validación DC pico demanda
-python <ruta-al-repo>/scripts/network_500kv/17_build_gen_profiles_2024.py
+# Real 2024 data — require external files (not versioned in git)
+python scripts/network_500kv/13_clean_valores_2024.py
+python scripts/network_500kv/14_detect_generator_conflicts.py
+# → complete conflicts_psse_cammesa.csv before continuing
+python scripts/network_500kv/14b_build_generators_2024.py
+python scripts/network_500kv/15_build_loads_2024.py
+python scripts/network_500kv/16_snapshot_dc_peak2024.py   # DC peak demand validation
+python scripts/network_500kv/17_build_gen_profiles_2024.py
 
-# Costos marginales — requieren archivos CVP externos (no versionados en git)
-python <ruta-al-repo>/scripts/network_500kv/18_diagnostico_costos_marginales.py
-# → completar columna CVP_manual en 18_costos_marginales_diagnostico.csv antes de continuar
-python <ruta-al-repo>/scripts/network_500kv/18B_build_costos_marginales_2024.py
+# Marginal costs — require external CVP files (not versioned in git)
+python scripts/network_500kv/18_diagnose_marginal_costs.py
+# → complete CVP_manual column in marginal_costs_diagnostic.csv before continuing
+python scripts/network_500kv/18b_build_marginal_costs_2024.py
 
-# Optimización — configurar FECHA_INICIO, FECHA_FIN y CHUNK_DIAS antes de correr
-python <ruta-al-repo>/scripts/network_500kv/19_run_optimization.py
-
-# Script 20 (análisis de resultados): pendiente de construcción
-# → levantar results_2024_*.nc y comparar despacho simulado vs real CAMMESA
-
-# Clustering espacial — configurar CLUSTER_SIZES y BUS_WEIGHTING antes de correr
-python <ruta-al-repo>/scripts/network_500kv/21_network_clustering.py
+# Economic dispatch — configure START_DATE, END_DATE and CHUNK_DAYS in the script before running
+python scripts/network_500kv/19_run_optimization.py
 ```
 
-> **Nota:** las rutas a los archivos fuente (PSS/E raw, GeoSADI, CAMMESA) están hardcodeadas en la sección
-> `CONFIGURACION` al inicio de cada script. Si la estructura de carpetas es distinta, actualizarlas antes de correr.
+## Team
 
-> **Archivos externos a GitHub:** `VALORES_2024.csv`, `valores_2024_clean.csv`, `Dda_horaria_x_trafo_2024.csv`,
-> `gen_profiles_2024.csv`, `CVP_Termica.csv`, `CVP_renovar.csv`, `results_2024_*.nc` y `cluster_k{N}.nc`
-> no están versionados por tamaño o volumen. Ver `docs/data_sources.md` para su origen.
-
----
-
-## Equipo
-
-| Nombre | Rol |
-|--------|-----|
-| Gustavo Barbaran | Líder del proyecto |
-| Gustavo Ramirez | Datos y modelado de red |
-| Juan Manuel Bregman | Programación y pipeline |
+| Name | Role |
+|------|------|
+| Gustavo Barbaran | Project lead |
+| Gustavo Ramirez | Data and network modeling |
+| Juan Manuel Bregman | Programming and pipeline |
 
 ---
 
-## Documentación
+## Documentation
 
-Ver carpeta `docs/` para:
-- `roadmap.md` — estado y fases del proyecto
-- `architecture.md` — diseño del modelo
-- `data_sources.md` — fuentes de datos y estado
-- `aprendizaje_pypsaearth_ar.md` — por qué se abandonó PyPSA-Earth
-- `auditoria_macro_geosadi_vs_pypsa.md` — comparación cuantitativa GeoSADI vs OSM
-- `auditoria_red_oficial_vs_pypsa.md` — proceso de auditoría y decisión de migrar a GeoSADI
+See the `docs/` folder for:
+- `roadmap.md` — project status and phases
+- `architecture.md` — model design
+- `data_sources.md` — data sources and status
+- `aprendizaje_pypsaearth_ar.md` — why PyPSA-Earth was abandoned
+- `auditoria_macro_geosadi_vs_pypsa.md` — quantitative comparison GeoSADI vs OSM
+- `auditoria_red_oficial_vs_pypsa.md` — audit process and decision to migrate to GeoSADI

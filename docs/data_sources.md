@@ -1,218 +1,202 @@
 # PyPSA-AR Data Sources
 
-Este documento describe las fuentes de datos del proyecto y su estado actual.
+This document describes the project's data sources and their current status.
 
 ---
 
-## 1. Red de transporte — 500 kV
+## 1. Transmission network — 500 kV
 
-### Fuente principal: PSS/E ver2526pid.raw (CAMMESA)
+### Primary source: PSS/E ver2526pid.raw (CAMMESA)
 
-Caso: *Pico Hábil Diurno del Verano 25/26 — Demanda SADI 30.960 MW*
+Case: *Peak Weekday Daytime Summer 25/26 — SADI Demand 30,960 MW*
 
-Contiene:
-- BUS DATA: buses con nivel de tensión, tipo (PQ/PV/slack), área
-- BRANCH DATA: líneas y compensadores serie con r, x, b en pu (Sbase=100 MVA) y ratings MVA
-- TRANSFORMER DATA: transformadores inter-nivel (2W y 3W)
+Contains:
+- BUS DATA: buses with voltage level, type (PQ/PV/slack), area
+- BRANCH DATA: lines and series compensators with r, x, b in pu (Sbase=100 MVA) and MVA ratings
+- TRANSFORMER DATA: inter-level transformers (2W and 3W)
 
-Procesado por: `01_parse_raw_buses.py`, `02_parse_raw_lines.py`, `03_parse_raw_transformers.py`, `04_parse_raw_buses_sec.py`
+Processed by: `01_parse_raw_buses.py`, `02_parse_raw_lines.py`, `03_parse_raw_transformers.py`, `04_parse_raw_buses_sec.py`
 
-### Fuente geográfica: GeoSADI (CAMMESA)
+### Geographic source: GeoSADI (CAMMESA)
 
 URL: https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
 
-Layers utilizados:
-- `estaciones_transformadoras.geojson` — coordenadas y nombre de estaciones por nivel de tensión
-- `lineas_alta_tension.geojson` — geometría de líneas con nombre y tensión
-- `centrales_electricas.csv` — centrales con nombre, nemo y coordenadas
+Layers used:
+- `estaciones_transformadoras.geojson` — substation coordinates and names by voltage level
+- `lineas_alta_tension.geojson` — line geometry with name and voltage
+- `centrales_electricas.csv` — power plants with name, nemo and coordinates
 
-Procesado por: `05_match_geosadi_coords.py`, `06_match_geosadi_geometry.py`, `11_add_geo_to_generators.py`
+Processed by: `05_match_geosadi_coords.py`, `06_match_geosadi_geometry.py`, `11_add_geo_to_generators.py`
 
-### Diccionarios de matching manual
+### Manual matching dictionaries
 
-`data/network_500kv/buses_PSSE_vs_geosadi.xlsx` — coordenadas curadas para los 95 buses 500 kV. Versionado en Git.
+`data/network_500kv/buses_PSSE_vs_geosadi.xlsx` — curated coordinates for the 95 500 kV buses. Versioned in Git.
 
-`data/network_500kv/manual_line_mappings.csv` — mapeo manual line_key → geosadi_line_id. Versionado en Git.
+`data/network_500kv/manual_line_mappings.csv` — manual mapping line_key → geosadi_line_id. Versioned in Git.
 
-`data/network_500kv/generators_manualpypsa.csv` — asignaciones manuales de generadores pendientes. Versionado en Git.
+`data/network_500kv/generators_manualpypsa.csv` — manual assignments for pending generators. Versioned in Git.
 
-`data/network_500kv/conflictos_psse_cammesa.csv` — resolución manual de discrepancias entre nombres PSS/E y GRUPOs CAMMESA. Versionado en Git.
+`data/network_500kv/conflicts_psse_cammesa.csv` — manual resolution of mismatches between PSS/E names and CAMMESA GRUPOs. Versioned in Git.
 
-### Estado
+### Status
 
-✅ 95 buses 500 kV + 249 buses secundarios en el network (344 totales tras fusión de acopladores)
-✅ 103 líneas activas procesadas
-✅ 300 transformadores procesados
-✅ Topología validada (1 componente conexa, 0 buses aislados)
-✅ Verificación visual en QGIS
-
----
-
-## 2. Generación
-
-### Fuente principal: CAMMESA — VALORES_2024.csv
-
-Archivo de generación horaria del Mercado Eléctrico Mayorista para el año 2024.
-Contiene ENERGIA (MWh), POT_DISP (MW), ENERG_OPERADA (MWh) y POT_DISP_GN (MW) por
-GRUPO y hora, para todas las unidades del despacho.
-
-Procesado por: `13_clean_valores_2024.py` → `valores_2024_clean.csv`
-
-Transformaciones aplicadas:
-- Filtro año 2024
-- Normalización de formato datetime a DD/MM/YYYY HH:MM
-- Exclusión de YACYHIPY (lado paraguayo de Yacyretá)
-- Factor 0.5 a SGDE (Salto Grande — central binacional Argentina/Uruguay)
-- Detección de outliers por GRUPO (flag_outlier)
-
-Archivo resultante: `valores_2024_clean.csv` — externo a GitHub (~580 MB).
-
-### Fuente complementaria: GeoSADI — centrales_electricas
-
-Coordenadas y nemo de 436 centrales del SADI. Usado para asignar coordenadas
-geográficas a las unidades generadoras del modelo.
-
-### Estado
-
-✅ 669 unidades generadoras en `generators_final.csv`
-✅ 626 unidades en `generators_2024.csv` con p_nom real 2024 (p95 POT_DISP)
-✅ 77 conflictos PSS/E vs CAMMESA detectados y resueltos manualmente
-✅ p_nom total del sistema: ~40.084 MW
-✅ Perfiles horarios p_max_pu 2024: `gen_profiles_2024.csv` (externo a GitHub, ~5.3M filas, ~577 unidades)
-✅ Costos marginales: `costos_marginales_2024.csv` (~433 unidades con costo asignado, ~171 con costo=0 pendientes de completar)
+✅ 95 500 kV buses + 249 secondary buses in the network (344 total after coupler fusion)
+✅ 103 active lines processed
+✅ 300 transformers processed
+✅ Topology validated (1 connected component, 0 isolated buses)
+✅ Visual verification in QGIS
 
 ---
 
-## 3. Demanda
+## 2. Generation
 
-### Fuente: CAMMESA — Dda_horaria_x_trafo_2024.csv
+### Primary source: CAMMESA — VALORES_2024.csv
 
-Demanda horaria 2024 por transformador de distribución. Formato ancho: una fila por
-transformador, 8784 columnas de valores horarios en MW. Incluye metadata de cada
-transformador: bus 500 kV de conexión, región, provincia y participación en la
-demanda provincial.
+Hourly generation file from the Argentine Wholesale Electricity Market (MEM) for 2024.
+Contains ENERGIA (MWh), POT_DISP (MW), ENERG_OPERADA (MWh) and POT_DISP_GN (MW) per
+GRUPO and hour, for all dispatch units.
 
-Procesado por: `15_build_loads_2024.py` → `loads_2024.csv`
+Processed by: `13_clean_valores_2024.py` → `valores_2024_clean.csv`
 
-Archivo resultante: `loads_2024.csv` — versionado en Git (72 buses × 8784 horas).
+Transformations applied:
+- Filter year 2024
+- Datetime format normalization to DD/MM/YYYY HH:MM
+- Exclusion of YACYHIPY (Paraguayan side of Yacyretá)
+- Factor 0.5 to SGDE (Salto Grande — binational plant Argentina/Uruguay)
+- Outlier detection per GRUPO (flag_outlier)
 
-### Estado
+Output file: `valores_2024_clean.csv` — external to GitHub (~580 MB).
 
-✅ 72 buses con demanda asignada
-✅ Pico de demanda del sistema: 27.439 MW (01/02/2024 14:00)
-✅ Promedio anual: ~15.963 MW | Mínimo: ~9.365 MW (25/12/2024 07:00)
+### Complementary source: GeoSADI — centrales_electricas
 
----
+Coordinates and nemo for 436 SADI power plants. Used to assign geographic
+coordinates to the model's generator units.
 
-## 4. Validación DC — snapshot pico de demanda 2024
+### Status
 
-### Script: `16_snapshot_dc_pico2024.py`
-
-Flujo DC linealizado sobre el snapshot de máximo pico de demanda del año 2024.
-
-Resultados (01/02/2024 14:00):
-- Generación despachada: 26.374 MW
-- Inyección del slack (ATUCHA 2): 1.013 MW
-- Demanda total: 27.439 MW
-- Brecha explicada por importaciones de Brasil (~2.267 MW, no modeladas)
-- Línea más cargada: C.COSTA-P.BAND.-1 al 133% de su rating PSS/E (rating identificado en 866 MVA, conservador para las condiciones reales de la línea)
-
-### Estado
-
-✅ Flujo DC converge
-✅ Balance generación/demanda consistente con datos CAMMESA
-✅ Congestión en corredor C.COSTA-P.BAND. coherente con la limitación de modelar solo red 500 kV sin los paralelos de niveles inferiores
+✅ 669 generator units in `generators_final.csv`
+✅ 626 units in `generators_2024.csv` with real 2024 p_nom (p95 POT_DISP)
+✅ 77 PSS/E vs CAMMESA conflicts detected and resolved manually
+✅ Total system p_nom: ~40,084 MW
+✅ Hourly p_max_pu profiles 2024: `gen_profiles_2024.csv` (external to GitHub, ~5.3M rows, ~577 units)
+✅ Marginal costs: `marginal_costs_2024.csv` (~433 units with assigned cost, ~171 with cost=0 pending completion)
 
 ---
 
-## 5. Costos marginales
+## 3. Demand
 
-### Fuente: CAMMESA — CVP_Termica.csv + CVP_renovar.csv
+### Source: CAMMESA — Dda_horaria_x_trafo_2024.csv
 
-Costos variables de producción por central, extraídos de los archivos posoperativos de CAMMESA.
+2024 hourly demand by distribution transformer. Wide format: one row per
+transformer, 8784 hourly value columns in MW. Includes metadata for each
+transformer: 500 kV connection bus, region, province and share of provincial demand.
 
-Procesado por:
-- `18_diagnostico_costos_marginales.py` → `18_costos_marginales_diagnostico.csv` (auditoría de cobertura)
-- `18B_build_costos_marginales_2024.py` → `costos_marginales_2024.csv` (tabla final)
+Processed by: `15_build_loads_2024.py` → `loads_2024.csv`
 
-Lógica de asignación:
-- Térmica/nuclear: match por clave reducida (nemo4 + número de unidad) contra CVP_Termica
-- Renovables: match por nombre de central normalizado contra CVP_renovar (promedio anual Jan-24 a Dec-24)
-- Hidro y pendientes: columna `CVP_manual` completada manualmente en el diagnóstico
+Output file: `loads_2024.csv` — versioned in Git (72 buses × 8784 hours).
 
-Archivos CVP fuente: externos a GitHub.
-Archivo resultante: `costos_marginales_2024.csv` — versionado en Git.
+### Status
 
-### Estado
-
-✅ ~433 unidades con costo marginal asignado
-⚠️ ~171 unidades con costo=0 (hidros pendientes de completar por equipo de trabajo)
+✅ 72 buses with assigned demand
+✅ System peak demand: 27,439 MW (01/02/2024 14:00)
+✅ Annual average: ~15,963 MW | Minimum: ~9,365 MW (25/12/2024 07:00)
 
 ---
 
-## 6. Optimización y clustering
+## 4. DC validation — 2024 peak demand snapshot
 
-### Script 19: `19_run_optimization.py`
+### Script: `16_snapshot_dc_peak2024.py`
 
-Despacho económico lineal DC (OPF) sobre la red 500 kV para el período configurado.
-Usa `n.optimize()` con solver HiGHS. Parámetros configurables: período temporal,
-chunking por días para manejo de memoria, tratamiento de generadores sin costo.
+Linearized DC flow on the maximum peak demand snapshot of 2024.
 
-Archivo resultante: `results_2024_YYYYMMDD_YYYYMMDD.nc` en `networks/` — externo a GitHub.
+Results (01/02/2024 14:00):
+- Dispatched generation: 26,374 MW
+- Slack injection (ATUCHA 2): 1,013 MW
+- Total demand: 27,439 MW
+- Gap explained by Brazilian imports (~2,267 MW, not modeled)
+- Most loaded line: C.COSTA-P.BAND.-1 at 133% of its PSS/E rating (rating identified at 866 MVA, conservative for the line's real operating conditions)
 
-### Script 21: `21_network_clustering.py`
+### Status
 
-Clustering espacial k-means nativo de PyPSA para simplificación de la red.
-Genera redes clusterizadas funcionales para análisis de largo plazo.
-Parámetro configurable: `CLUSTER_SIZES` (lista de niveles de agregación) y
-criterio de pesos (`BUS_WEIGHTING`).
-
-Archivos resultantes en `data/network_500kv/clusters/`:
-- `clusters.gpkg` — visualización QGIS con layers por nivel de agregación
-- `cluster_summary_k{N}.csv` — capacidad instalada por tecnología por cluster
-- `cluster_k{N}.nc` — network clusterizado funcional para `n.optimize()`
-
-### Estado
-
-✅ Script 19 construido y listo para correr
-✅ Script 21 corrido exitosamente para K=10, K=20, K=50
-✅ Clusters visualizados en QGIS (`data/network_500kv/clusters/clusters.qgz`)
-🔲 Script 20 (análisis de resultados de optimización): pendiente
+✅ DC flow converges
+✅ Generation/demand balance consistent with CAMMESA data
+✅ Congestion at C.COSTA-P.BAND. corridor coherent with the limitation of modeling only the 500 kV network without lower-voltage parallel paths
 
 ---
 
-## 7. Renovables (VRE) — para etapas futuras
+## 5. Marginal costs
 
-### Viento y solar
+### Source: CAMMESA — CVP_Termica.csv + CVP_renovar.csv
 
-- ERA5 (velocidades de viento, irradiancia)
-- Atlas Solar Argentina
-- Procesamiento con atlite para factores de capacidad horarios
+Variable production costs per plant, extracted from CAMMESA post-operative files.
 
-En la versión actual, los perfiles de solar y eólica se construyen desde ENERGIA
-real de CAMMESA 2024 (script 17). Los perfiles meteorológicos de ERA5/atlite se
-incorporarán en etapas futuras para escenarios prospectivos.
+Processed by:
+- `18_diagnose_marginal_costs.py` → `marginal_costs_diagnostic.csv` (coverage audit)
+- `18b_build_marginal_costs_2024.py` → `marginal_costs_2024.csv` (final table)
 
-Estado: 🔲 no iniciado.
+Assignment logic:
+- Thermal/nuclear: match by reduced key (nemo4 + unit number) against CVP_Termica
+- Renewables: match by normalized plant name against CVP_renovar (annual average Jan-24 to Dec-24)
+- Hydro and pending: `CVP_manual` column filled manually in the diagnostic file
 
----
+Source CVP files: external to GitHub.
+Output file: `marginal_costs_2024.csv` — versioned in Git.
 
-## 8. Precios de combustibles y emisiones — para etapas futuras
+### Status
 
-### Fuentes
-
-- ENARGAS (gas natural)
-- CAMMESA (precios de referencia)
-- IRENA / NREL ATB (referencias internacionales)
-- Factores de emisión por tecnología (tCO2/MWh)
-
-Estado: 🔲 a estructurar en fase de calibración.
+✅ ~433 units with assigned marginal cost
+⚠️ ~171 units with cost=0 (hydro units pending completion by the project team)
 
 ---
 
-## Principios de gestión de datos
+## 6. Optimization
 
-- Toda fuente debe tener referencia y fecha de extracción.
-- Archivos crudos pesados (.raw, .geojson, .nc, .csv >50 MB) se almacenan fuera de Git.
-- Solo se versionan: scripts, CSVs procesados livianos, diccionarios de matching y documentación.
-- Todas las transformaciones son reproducibles desde los archivos fuente.
+### Script: `19_run_optimization.py`
+
+Linear DC economic dispatch (OPF) over the 500 kV network for the configured period.
+Uses `n.optimize()` with the HiGHS solver. Configurable parameters: time period,
+day chunking for memory management, treatment of generators with no cost.
+
+Output file: `results_2024_YYYYMMDD_YYYYMMDD.nc` in `networks/` — external to GitHub.
+
+### Status
+
+✅ Script built and ready to run
+
+---
+
+## 7. Renewables (VRE) — for future stages
+
+### Wind and solar
+
+- ERA5 (wind speeds, irradiance)
+- Argentine Solar Atlas
+- Processing with atlite for hourly capacity factors
+
+In the current version, solar and wind profiles are built from real CAMMESA 2024 ENERGIA
+(script 17). ERA5/atlite meteorological profiles will be incorporated in future stages
+for prospective scenarios.
+
+Status: 🔲 not started.
+
+---
+
+## 8. Fuel prices and emissions — for future stages
+
+### Sources
+
+- ENARGAS (natural gas)
+- CAMMESA (reference prices)
+- IRENA / NREL ATB (international references)
+- Emission factors by technology (tCO2/MWh)
+
+Status: 🔲 to be structured in a further phase.
+
+---
+
+## Data management principles
+
+- Every source must have a reference and extraction date.
+- Large raw files (.raw, .geojson, .nc, .csv >50 MB) are stored outside of Git.
+- Only versioned: scripts, lightweight processed CSVs, matching dictionaries and documentation.
+- All transformations are reproducible from the source files.
