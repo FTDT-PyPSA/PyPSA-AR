@@ -1,22 +1,23 @@
 """
 aliases_500kv.py
-Diccionario de aliases para traducir tokens del campo Nombre de lineas GeoSADI
-al nombre canonico de la estacion (name_geosadi normalizado).
+Alias dictionary used to translate tokens from the GeoSADI line Nombre field
+into the canonical substation name (normalized name_geosadi).
 
-Las claves son exactamente como quedan los tokens tras normalize():
-    sin tildes, mayusculas, sin puntuacion, espacios simples.
-    Se incluye la version SIN espacios (token concatenado) Y
-    la version CON espacios (token_sp) porque el script 04
-    busca ambas en cada ventana deslizante.
+Keys must match the exact output of normalize():
+    no accents, uppercase, no punctuation, single spaces.
+    Both the version WITHOUT spaces (concatenated token) and
+    the version WITH spaces (token_sp) are included because script 04
+    checks both in each sliding window.
 
-Razon de los aliases de "identidad" (valor == clave):
-    Los nombres de estacion de multiples palabras (GRAN PARANA, SANTO TOME, etc.)
-    no matchean solos porque el sliding window los parte en tokens individuales.
-    El alias de identidad hace que el window de N palabras los capture como unidad.
+Reason for the "identity" aliases (value == key):
+    Multi-word substation names (GRAN PARANA, SANTO TOME, etc.)
+    do not match on their own because the sliding window splits them
+    into individual tokens.
+    The identity alias allows an N-word window to capture them as a unit.
 
-Mantenimiento:
-    Agregar entradas cuando aparezcan nuevos sin_match al correr el script 04.
-    El reporte muestra los tokens [BUS_I] — [BUS_J] para guiar el diagnostico.
+Maintenance:
+    Add new entries whenever new no_match cases appear while running script 04.
+    The report shows the [BUS_I] — [BUS_J] tokens to guide the diagnosis.
 """
 
 ALIASES = {

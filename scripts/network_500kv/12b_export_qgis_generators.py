@@ -1,50 +1,57 @@
 """
 12b_export_qgis_generators.py
-Agrega un layer de centrales electricas al GeoPackage existente para
-visualizacion en QGIS.
+Adds a power plants layer to the network GeoPackage for visualization in QGIS.
 
-Depende:
-    data/network_500kv/generators_final.csv        (script 12)
-    data/GIS_psse_geosadi_pypsaearth/balance_gen_carga.gpkg  (script 10b)
+Depends : data/network_500kv/generators_final.csv         (script 12)
+          data/GIS_psse_geosadi_pypsaearth/network_500kv_qgis.gpkg  (script 07b)
 
-Output:
-    Agrega layer 'centrales_electricas' al GeoPackage existente.
+Output  : adds layer 'power_plants' to network_500kv_qgis.gpkg
 
-    Atributos del layer:
-        gen_key               : clave unica PSS/E
-        bus_name_origen       : nombre del bus origen en PSS/E
-        nombre_geosadi        : nombre de la central en GeoSADI
-        bus_conexion500kv_name: nodo del modelo al que conecta
-        carrier               : tipo tecnologico
-        pg_mw                 : despacho en snapshot PSS/E (MW)
-        pt_mw                 : potencia instalada (MW)
-        stat                  : estado en snapshot PSS/E (1=en servicio)
-        match_type            : como se resolvio la conexion al modelo
+    Layer attributes:
+        gen_key                : unique PSS/E key
+        bus_name_origen        : PSS/E origin bus name
+        geosadi_name           : power plant name in GeoSADI
+        bus_conexion500kv_name : model node the generator connects to
+        carrier                : technology type
+        pg_mw                  : dispatch in PSS/E snapshot (MW)
+        pt_mw                  : installed capacity (MW)
+        stat                   : PSS/E snapshot status (1=in service)
+        match_type             : how the model connection was resolved
 
-    Se excluyen generadores con PT >= 9000 MVA (equivalentes ficticios PSS/E)
-    y generadores sin coordenadas geograficas.
+    Generators with PT >= 9000 MVA (PSS/E fictitious equivalents) and
+    generators without geographic coordinates are excluded.
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/12b_export_qgis_generators.py
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/12b_export_qgis_generators.py
+
+Suggested QGIS symbology:
+    Symbology -> Categorized by 'carrier'
+    Point size proportional to pt_mw:
+        sqrt(pt_mw) / 3
 """
 
 import os
 import sys
+from pathlib import Path
+import yaml
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-DATA_DIR  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-GIS_DIR   = "/mnt/c/Work/pypsa-ar-base/data/GIS_psse_geosadi_pypsaearth"
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR = Path(_cfg["repo_dir"])
 
-GEN_FILE  = os.path.join(DATA_DIR, "generators_final.csv")
-GPKG_FILE = os.path.join(GIS_DIR,  "balance_gen_carga.gpkg")
+DATA_DIR  = REPO_DIR / "data/network_500kv"
+GIS_DIR   = REPO_DIR / "data/GIS_psse_geosadi_pypsaearth"
 
-LAYER_NAME = "centrales_electricas"
+GEN_FILE  = DATA_DIR / "generators_final.csv"
+GPKG_FILE = GIS_DIR  / "network_500kv_qgis.gpkg"
+
+LAYER_NAME = "power_plants"
 CRS        = "EPSG:4326"
 
 
@@ -54,78 +61,69 @@ CRS        = "EPSG:4326"
 
 def main():
     print("=" * 60)
-    print("12b_export_qgis_generators.py -- centrales electricas -> QGIS")
+    print("12b_export_qgis_generators.py -- power plants layer -> QGIS")
     print("=" * 60)
 
     if not os.path.isfile(GEN_FILE):
-        print("[ERROR] Archivo no encontrado:")
-        print("  " + GEN_FILE)
+        print(f"[ERROR] File not found:\n  {GEN_FILE}")
         sys.exit(1)
 
     gen = pd.read_csv(GEN_FILE)
-    print("Generadores cargados : " + str(len(gen)))
+    print(f"Generators loaded : {len(gen)}")
 
-    # Excluir equivalentes ficticios (PT >= 9000)
-    n_ficticios = len(gen[gen['pt_mw'] >= 9000])
-    if n_ficticios > 0:
-        print("  Excluidos PT=9999 (equivalentes ficticios): " + str(n_ficticios))
+    # Exclude fictitious PSS/E equivalents (PT >= 9000)
+    n_fictitious = len(gen[gen['pt_mw'] >= 9000])
+    if n_fictitious > 0:
+        print(f"  Excluded PT=9999 (fictitious equivalents): {n_fictitious}")
     gen = gen[gen['pt_mw'] < 9000].copy()
 
-    # Separar con y sin coordenadas
-    df_con = gen[gen['lat'].notna() & gen['lon'].notna()].copy()
-    df_sin = gen[gen['lat'].isna()  | gen['lon'].isna()].copy()
+    # Split by coordinate availability
+    df_with_coord    = gen[gen['lat'].notna() & gen['lon'].notna()].copy()
+    df_without_coord = gen[gen['lat'].isna()  | gen['lon'].isna()].copy()
 
-    print("  Con coordenadas    : " + str(len(df_con)))
-    print("  Sin coordenadas    : " + str(len(df_sin)) + "  (excluidos del layer)")
+    print(f"  With coordinates    : {len(df_with_coord)}")
+    print(f"  Without coordinates : {len(df_without_coord)}  (excluded from layer)")
 
-    if not df_sin.empty:
-        print("\n  Centrales sin coordenadas:")
-        for _, r in df_sin.iterrows():
-            print("    " + str(r['bus_name_origen']).ljust(15) +
-                  " carrier=" + str(r['carrier']).ljust(12) +
-                  " pt=" + str(round(r['pt_mw'], 1)) + " MW")
+    if not df_without_coord.empty:
+        print("\n  Power plants without coordinates:")
+        for _, r in df_without_coord.iterrows():
+            print(f"    {str(r['bus_name_origen']):<15}"
+                  f"  carrier={str(r['carrier']):<12}"
+                  f"  pt={round(r['pt_mw'], 1)} MW")
 
-    # Construir GeoDataFrame
+    # Build GeoDataFrame
     gdf = gpd.GeoDataFrame(
-        df_con,
-        geometry=[Point(r['lon'], r['lat']) for _, r in df_con.iterrows()],
+        df_with_coord,
+        geometry=[Point(r['lon'], r['lat']) for _, r in df_with_coord.iterrows()],
         crs=CRS
     )
 
     cols = [
-        'gen_key', 'bus_name_origen', 'nombre_geosadi',
+        'gen_key', 'bus_name_origen', 'geosadi_name',
         'bus_conexion500kv_name', 'carrier',
         'pg_mw', 'pt_mw', 'stat', 'match_type',
         'geometry',
     ]
     gdf = gdf[cols]
 
-    # Reporte por carrier
+    # Summary by carrier
     print("\n" + "=" * 60)
-    print("RESUMEN POR CARRIER")
+    print("SUMMARY BY CARRIER")
     print("=" * 60)
     for carrier, grp in gdf.groupby('carrier'):
         mw = grp['pt_mw'].sum()
-        print("  " + str(carrier).ljust(15) + ": " +
-              str(len(grp)).rjust(4) + " centrales   " +
-              str(round(mw, 1)).rjust(10) + " MW")
+        print(f"  {str(carrier):<15}: {len(grp):>4} power plants   {round(mw, 1):>10} MW")
 
     mw_total = gdf['pt_mw'].sum()
-    print("\n  TOTAL              : " +
-          str(len(gdf)).rjust(4) + " centrales   " +
-          str(round(mw_total, 1)).rjust(10) + " MW")
+    print(f"\n  TOTAL              : {len(gdf):>4} power plants   {round(mw_total, 1):>10} MW")
 
-    # Exportar layer al GPKG
+    # Export layer to GPKG
     os.makedirs(GIS_DIR, exist_ok=True)
     gdf.to_file(GPKG_FILE, layer=LAYER_NAME, driver="GPKG")
 
-    print("\nLayer '" + LAYER_NAME + "' agregado a " + GPKG_FILE)
-    print("  " + str(len(gdf)) + " centrales exportadas")
-    print("\nSimbologia sugerida en QGIS:")
-    print("  Simbologia -> Categorizado por 'carrier'")
-    print("  Tamanio de punto proporcional a pt_mw:")
-    print("    sqrt(pt_mw) / 3")
-    print("\nProximo: 12c_test_snapshot.py")
+    print(f"\nLayer '{LAYER_NAME}' added to {GPKG_FILE}")
+    print(f"  {len(gdf)} power plants exported")
+    print("Next: 12c_test_snapshot.py")
 
 
 if __name__ == "__main__":

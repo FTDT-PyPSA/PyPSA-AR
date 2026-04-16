@@ -1,60 +1,68 @@
 """
 05_match_geosadi_coords.py
-Asigna coordenadas geograficas a todos los buses del modelo y consolida
-en un unico archivo buses_final.csv.
+Assigns geographic coordinates to all model buses and consolidates them
+into a single buses_final.csv file.
 
-Fuente geo    : Official data/geosadi/csv/estaciones_transformadoras.csv
-Depende       : data/network_500kv/buses_500kv_raw.csv   (script 01)
-                data/network_500kv/buses_sec_raw.csv      (script 04)
-                data/network_500kv/buses_PSSE_vs_geosadi.xlsx  (diccionario manual)
-Output        : data/network_500kv/buses_final.csv
+Depends : data/network_500kv/buses_500kv_raw.csv          (script 01)
+          data/network_500kv/buses_sec_raw.csv             (script 04)
+          data/network_500kv/buses_PSSE_vs_geosadi.xlsx    (manual matching dictionary — versioned in repo)
+Output  : data/network_500kv/buses_final.csv
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/05_match_geosadi_coords.py
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/05_match_geosadi_coords.py
 
-Logica:
-    BUSES 500 kV:
-        Las coordenadas vienen del diccionario manual buses_PSSE_vs_geosadi.xlsx
-        que contiene lat/lon curadas para los 95 buses 500 kV.
-        match_status = 'manual'
+Logic:
+   500 kV BUSES:
+    Coordinates come from the manual dictionary buses_PSSE_vs_geosadi.xlsx.
+    Each PSS/E bus was matched against the GeoSADI public GIS viewer:
+        https://www.arcgis.com/apps/instant/sidebar/index.html?appid=4b0ffba2055745a3afdbe1444d2db6d7
+    For buses where the match was not straightforward, the full connection
+    topology was studied to determine the correct substation location.
+    match_status = 'manual'
 
-    BUSES SECUNDARIOS:
-        Heredan las coordenadas del bus 500 kV padre (mismo parent_bus_id).
-        Fisicamente correcto: estan en la misma estacion que el trafo que los conecta.
-        match_status = 'heredado'
+    SECONDARY BUSES:
+        Inherit coordinates from their 500 kV parent bus (same parent_bus_id).
+        Physically correct: they are located at the same substation as the
+        transformer connecting them.
+        match_status = 'inherited'
 
-    CONSOLIDACION:
-        Ambos grupos se unen en un unico DataFrame con columnas comunes.
-        El campo bus_type indica '500kV' o 'secundario'.
+    CONSOLIDATION:
+        Both groups are merged into a single DataFrame with common columns.
+        The bus_type field indicates '500kV' or 'secondary'.
 
-Columnas del output:
-    bus_id         : ID numerico PSS/E
-    bus_name       : nombre del bus en el modelo
-    bus_name_psse  : nombre original PSS/E (NaN para buses 500kV donde coincide)
-    bus_type       : '500kV' o 'secundario'
-    baskv_kv       : tension base en kV
-    ide            : tipo de bus PSS/E (1=PQ, 2=PV, 3=slack, 4=isolated)
-    ide_desc       : descripcion del tipo
-    lat            : latitud decimal (WGS84)
-    lon            : longitud decimal (WGS84)
-    parent_bus_id  : bus 500kV padre (NaN para buses 500kV)
-    name_geosadi   : nombre GeoSADI asignado (solo buses 500kV)
+Output columns:
+    bus_id         : PSS/E numeric bus ID
+    bus_name       : bus name in the model
+    bus_name_psse  : original PSS/E name (NaN for 500 kV buses where it matches)
+    bus_type       : '500kV' or 'secondary'
+    baskv_kv       : base voltage in kV
+    ide            : PSS/E bus type (1=PQ, 2=PV, 3=slack, 4=isolated)
+    ide_desc       : bus type description
+    lat            : decimal latitude (WGS84)
+    lon            : decimal longitude (WGS84)
+    parent_bus_id  : 500 kV parent bus (NaN for 500 kV buses)
+    name_geosadi   : assigned GeoSADI name (500 kV buses only)
 """
 
 import os
 import sys
+from pathlib import Path
+import yaml
 import pandas as pd
 import numpy as np
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-BUSES_500_FILE  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_500kv_raw.csv"
-BUSES_SEC_FILE  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_sec_raw.csv"
-MANUAL_FILE     = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_PSSE_vs_geosadi.xlsx"
-OUTPUT_DIR      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-OUTPUT_FILE     = os.path.join(OUTPUT_DIR, "buses_final.csv")
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR     = Path(_cfg["repo_dir"])
+
+BUSES_500_FILE = REPO_DIR / "data/network_500kv/buses_500kv_raw.csv"
+BUSES_SEC_FILE = REPO_DIR / "data/network_500kv/buses_sec_raw.csv"
+MANUAL_FILE    = REPO_DIR / "data/network_500kv/buses_PSSE_vs_geosadi.xlsx"
+OUTPUT_DIR     = REPO_DIR / "data/network_500kv"
+OUTPUT_FILE    = OUTPUT_DIR / "buses_final.csv"
 
 IDE_DESC = {
     1: "PQ",
@@ -70,78 +78,69 @@ IDE_DESC = {
 
 def main():
     print("=" * 60)
-    print("05_match_geosadi_coords.py -- consolidar buses con coordenadas")
+    print("05_match_geosadi_coords.py -- consolidate buses with coordinates")
     print("=" * 60)
 
     for f in [BUSES_500_FILE, BUSES_SEC_FILE, MANUAL_FILE]:
         if not os.path.isfile(f):
-            print(f"[ERROR] Archivo no encontrado:\n  {f}")
+            print(f"[ERROR] File not found:\n  {f}")
             sys.exit(1)
 
     # ==========================================================
-    # BUSES 500 kV — coordenadas desde diccionario manual
+    # 500 kV BUSES — coordinates from manual dictionary
     # ==========================================================
     buses_500 = pd.read_csv(BUSES_500_FILE)
     manual    = pd.read_excel(MANUAL_FILE)
-    print(f"\nBuses 500 kV cargados     : {len(buses_500)}")
-    print(f"Entradas en diccionario   : {len(manual)}")
+    print(f"\n500 kV buses loaded       : {len(buses_500)}")
+    print(f"Dictionary entries        : {len(manual)}")
 
-    # Merge por bus_id
+    # Merge by bus_id
     manual_coords = manual[['bus_id', 'name_geosadi', 'lat', 'lon']].copy()
     buses_500 = buses_500.merge(manual_coords, on='bus_id', how='left')
 
-    n_sin_coord = buses_500['lat'].isna().sum()
-    if n_sin_coord:
-        print(f"  ⚠ {n_sin_coord} buses 500 kV sin coordenadas en el diccionario:")
+    n_no_coord = buses_500['lat'].isna().sum()
+    if n_no_coord:
+        print(f"  ⚠ {n_no_coord} 500 kV buses without coordinates in dictionary:")
         for _, r in buses_500[buses_500['lat'].isna()].iterrows():
             print(f"    {r['bus_name']}")
 
     buses_500['bus_type']      = '500kV'
-    buses_500['bus_name_psse'] = np.nan  # para 500kV bus_name ya es el nombre PSS/E
-
+    buses_500['bus_name_psse'] = np.nan  # for 500 kV buses, bus_name already is the PSS/E name
     buses_500['parent_bus_id'] = np.nan
     buses_500['ide_desc']      = buses_500['ide'].map(IDE_DESC).fillna('unknown')
 
-    print(f"  ✔ Coordenadas asignadas via diccionario manual")
+    print(f"  ✔ Coordinates assigned via manual dictionary")
 
     # ==========================================================
-    # BUSES SECUNDARIOS — heredar coordenadas del padre 500 kV
+    # SECONDARY BUSES — inherit coordinates from 500 kV parent
     # ==========================================================
     buses_sec = pd.read_csv(BUSES_SEC_FILE)
-    print(f"\nBuses secundarios cargados: {len(buses_sec)}")
+    print(f"\nSecondary buses loaded    : {len(buses_sec)}")
 
-    # Mapa parent_bus_id -> (lat, lon)
+    # Map parent_bus_id -> (lat, lon)
     parent_coords = buses_500[['bus_id', 'lat', 'lon']].set_index('bus_id')
 
     buses_sec['lat'] = buses_sec['parent_bus_id'].map(parent_coords['lat'])
     buses_sec['lon'] = buses_sec['parent_bus_id'].map(parent_coords['lon'])
 
-    n_sin_padre = buses_sec['lat'].isna().sum()
-    if n_sin_padre:
-        print(f"  ⚠ {n_sin_padre} buses secundarios sin coordenadas (padre sin coord):")
+    n_no_parent = buses_sec['lat'].isna().sum()
+    if n_no_parent:
+        print(f"  ⚠ {n_no_parent} secondary buses without coordinates (parent has no coord):")
         for _, r in buses_sec[buses_sec['lat'].isna()].iterrows():
             print(f"    {r['bus_name']}  parent={r['parent_bus_id']}")
 
-    buses_sec['bus_type']     = 'secundario'
-
+    buses_sec['bus_type']     = 'secondary'
     buses_sec['name_geosadi'] = np.nan
 
-    print(f"  ✔ Coordenadas heredadas del bus 500 kV padre")
+    print(f"  ✔ Coordinates inherited from 500 kV parent bus")
 
-    # Sin offset — buses secundarios de la misma estacion comparten coordenadas
-    # intencionalmente (estan en el mismo lugar fisico)
+    # No offset — secondary buses at the same substation intentionally
+    # share coordinates (they are at the same physical location)
 
     # ==========================================================
-    # CONSOLIDAR
+    # CONSOLIDATE
     # ==========================================================
-    col_500 = [
-        'bus_id', 'bus_name', 'bus_name_psse', 'bus_type',
-        'baskv_kv', 'ide', 'ide_desc',
-        'vm_pu', 'va_deg',
-        'lat', 'lon',
-        'parent_bus_id', 'name_geosadi',
-    ]
-    col_sec = [
+    cols = [
         'bus_id', 'bus_name', 'bus_name_psse', 'bus_type',
         'baskv_kv', 'ide', 'ide_desc',
         'vm_pu', 'va_deg',
@@ -149,25 +148,22 @@ def main():
         'parent_bus_id', 'name_geosadi',
     ]
 
-    df_500 = buses_500[col_500].copy()
-    df_sec = buses_sec[col_sec].copy()
-
-    df_final = pd.concat([df_500, df_sec], ignore_index=True)
+    df_final = pd.concat([buses_500[cols], buses_sec[cols]], ignore_index=True)
     df_final = df_final.sort_values(['bus_type', 'bus_id']).reset_index(drop=True)
 
     # ==========================================================
-    # REPORTE
+    # SUMMARY
     # ==========================================================
     print(f"\n{'='*60}")
-    print(f"RESUMEN")
+    print(f"SUMMARY")
     print(f"{'='*60}")
-    print(f"  Buses 500 kV      : {(df_final['bus_type']=='500kV').sum()}")
-    print(f"  Buses secundarios : {(df_final['bus_type']=='secundario').sum()}")
+    print(f"  500 kV buses      : {(df_final['bus_type']=='500kV').sum()}")
+    print(f"  Secondary buses   : {(df_final['bus_type']=='secondary').sum()}")
     print(f"  TOTAL             : {len(df_final)}")
-    print(f"\n  Con coordenadas   : {df_final['lat'].notna().sum()}")
-    print(f"  Sin coordenadas   : {df_final['lat'].isna().sum()}")
+    print(f"\n  With coordinates  : {df_final['lat'].notna().sum()}")
+    print(f"  Without coordinates: {df_final['lat'].isna().sum()}")
 
-    print(f"\nDistribucion por tension:")
+    print(f"\nVoltage distribution:")
     for kv, grp in df_final.groupby('baskv_kv'):
         kv_str = f"{int(kv)}kV" if kv == int(kv) else f"{kv:.1f}kV"
         print(f"  {kv_str:<10}: {len(grp)} buses")
@@ -175,8 +171,8 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_final.to_csv(OUTPUT_FILE, index=False)
 
-    print(f"\n✔ {OUTPUT_FILE}  ({len(df_final)} filas)")
-    print("Proximo: 06_match_geosadi_geometry.py")
+    print(f"\n✔ {OUTPUT_FILE}  ({len(df_final)} rows)")
+    print("Next: 06_match_geosadi_geometry.py")
 
 
 if __name__ == "__main__":

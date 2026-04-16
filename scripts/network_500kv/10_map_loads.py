@@ -1,80 +1,85 @@
 """
 10_map_loads.py
-Mapea todas las cargas del PSS/E a nodos del modelo (buses_final.csv).
+Maps all PSS/E loads to model nodes (buses_final.csv).
 
-Para cargas que conectan directamente a un nodo del modelo -> match_type='directo'
-Para el resto -> BFS sobre el grafo completo del PSS/E hasta encontrar
-                el primer nodo del modelo -> match_type='bfs'
-Si BFS no encuentra ningun nodo del modelo -> match_type='sin_conexion'
+For loads connecting directly to a model node -> match_type='direct'
+For the rest -> BFS over the full PSS/E graph until the first model node
+               is found -> match_type='bfs'
+If BFS finds no model node -> match_type='no_connection'
 
-Fuente : Official data/PSSE/ver2526pid.raw
-Depende: data/network_500kv/buses_final.csv
+Source : Official data/PSSE/ver2526pid.raw  (external — download from GitHub Releases, place in external_data_dir/PSSE/)
+Depends: data/network_500kv/buses_final.csv
 
-Output : data/network_500kv/loads_mapped.csv
+Output:
+    data/network_500kv/loads_mapped.csv
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/10_map_loads.py
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/10_map_loads.py
 
 ============================================================
-DECISIONES DE MODELADO
+MODELING DECISIONS
 ============================================================
 
-CONSTRUCCION DEL GRAFO:
-    Identica al script 09. Nodos: todos los buses del raw.
-    Aristas: BRANCH DATA + TRANSFORMER DATA, todas forzadas in_service.
+GRAPH CONSTRUCTION:
+    Nodes : all buses from the raw (full BUS DATA)
+    Edges : BRANCH DATA + TRANSFORMER DATA, all forced in_service.
 
-ALGORITMO BFS:
-    Identico al script 09. Para cada carga cuyo bus_id NO esta en
-    buses_final.csv se ejecuta BFS hasta encontrar el primer nodo
-    del modelo. Desempate por mayor baskv_kv.
+BFS ALGORITHM:
+    Identical to script 09. For each load whose bus_id is NOT in
+    buses_final.csv, BFS is run until the first model node is found.
+    Tiebreaking by highest baskv_kv.
 
-FILTRO DE INTERNACIONALES:
-    Se excluyen cargas cuyo bus pertenece a areas CAMMESA de
-    sistemas vecinos:
-        18=Paraguay, 19=Chile (SING), 20=Brasil, 22=Bolivia, 99=Uruguay
+INTERNATIONAL FILTER:
+    Loads whose bus belongs to CAMMESA areas of neighboring systems
+    are excluded:
+        18=Paraguay, 19=Chile (SING), 20=Brazil, 22=Bolivia, 99=Uruguay
 
-CARGA TOTAL POR BUS:
-    En este raw las componentes IP e YP son todas cero, por lo que
-    PL = carga activa total del bus. Se verifica en el reporte.
+TOTAL LOAD PER BUS:
+    In this raw the IP and YP components are all zero, so
+    PL = total active load of the bus. Verified in the report.
 
-COLUMNAS DEL OUTPUT loads_mapped.csv:
-    load_key         : bus_id_origen-load_id  clave unica en PSS/E
-    bus_id_origen    : bus_id PSS/E donde conecta fisicamente la carga
-    bus_name_origen  : nombre del bus origen en PSS/E
-    pl_mw            : carga activa en snapshot (MW)
-    stat             : estado en snapshot (1=activo, 0=inactivo)
-    match_type       : 'directo' / 'bfs' / 'sin_conexion'
-    bus_destino      : bus_id del nodo de buses_final.csv asignado
-    bus_destino_name : nombre del nodo destino
-    n_saltos         : saltos BFS hasta destino (0 si directo, -1 si sin_conexion)
-    camino           : secuencia de nombres de buses desde origen hasta destino
-                       vacio si directo (origen == destino)
+OUTPUT COLUMNS — loads_mapped.csv:
+    load_key             : bus_id_origen-load_id  unique PSS/E key
+    bus_id_origen        : PSS/E bus_id where the load connects physically
+    bus_name_origen      : name of the origin bus in PSS/E
+    pl_mw                : active load in snapshot (MW)
+    stat                 : snapshot status (1=active, 0=inactive)
+    match_type           : 'direct' / 'bfs' / 'no_connection'
+    bus_destination      : bus_id of the assigned node in buses_final.csv
+    bus_destination_name : name of the destination node
+    n_jumps              : BFS hops to destination (0=direct, -1=no_connection)
+    path                 : sequence of bus names from origin to destination
+                           empty if direct (origin == destination)
 """
 
 import os
 import sys
+from pathlib import Path
+import yaml
 import pandas as pd
 from collections import deque, defaultdict
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-RAW_FILE   = "/mnt/c/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw"
-BUSES_FILE = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_final.csv"
-OUTPUT_DIR = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-OUTPUT_CSV = os.path.join(OUTPUT_DIR, "loads_mapped.csv")
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR     = Path(_cfg["repo_dir"])
+EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
-# Areas CAMMESA de sistemas vecinos -- cargas de estos buses se excluyen
+RAW_FILE   = EXTERNAL_DIR / "PSSE/ver2526pid.raw"
+BUSES_FILE = REPO_DIR / "data/network_500kv/buses_final.csv"
+OUTPUT_DIR = REPO_DIR / "data/network_500kv"
+OUTPUT_CSV = OUTPUT_DIR / "loads_mapped.csv"
+
 INTERNATIONAL_AREAS = {18, 19, 20, 22, 99}
 
 
 # =============================================================================
-# PARSEO DEL RAW
+# PSS/E PARSING
 # =============================================================================
 
 def get_section(lines, begin_marker, end_marker):
-    """Extrae lineas de una seccion del raw entre markers."""
     inside = False
     result = []
     for line in lines:
@@ -92,8 +97,8 @@ def get_section(lines, begin_marker, end_marker):
 
 def parse_all_buses(lines):
     """
-    Parsea BUS DATA completo.
-    Retorna:
+    Parses full BUS DATA.
+    Returns:
         id_to_name  : dict bus_id -> bus_name
         id_to_baskv : dict bus_id -> baskv_kv
         id_to_area  : dict bus_id -> area
@@ -120,9 +125,9 @@ def parse_all_buses(lines):
 
 def parse_graph(lines):
     """
-    Construye grafo de adyacencia con BRANCH DATA + TRANSFORMER DATA.
-    Todas las ramas se tratan como activas (FORCE_ALL_IN_SERVICE).
-    Retorna dict: bus_id -> set de bus_ids vecinos
+    Builds adjacency graph from BRANCH DATA + TRANSFORMER DATA.
+    All branches treated as active (FORCE_ALL_IN_SERVICE).
+    Returns dict: bus_id -> set of neighbor bus_ids.
     """
     adj = defaultdict(set)
 
@@ -161,13 +166,13 @@ def parse_graph(lines):
 
 def parse_loads(lines, all_bus_ids, id_to_area):
     """
-    Parsea LOAD DATA.
-    Formato: I, 'ID', STAT, AREA, ZONE, PL, QL, IP, IQ, YP, YQ, OWNER, SCALE, INTRPT
-    Excluye cargas de areas internacionales.
-    Retorna lista de dicts.
+    Parses LOAD DATA.
+    Format: I, 'ID', STAT, AREA, ZONE, PL, QL, IP, IQ, YP, YQ, OWNER, SCALE, INTRPT
+    Excludes international loads.
+    Returns list of dicts.
     """
-    loads  = []
-    n_intl = 0
+    loads    = []
+    n_intl   = 0
     ip_total = 0.0
     yp_total = 0.0
 
@@ -185,10 +190,9 @@ def parse_loads(lines, all_bus_ids, id_to_area):
             rest = [x.strip() for x in line[q2+1:].split(',')]
             if rest[0] == '': rest = rest[1:]
             stat = int(rest[0])
-            # rest[1]=AREA, rest[2]=ZONE ya parseados
-            pl = float(rest[3])   # PL: potencia activa constante (MW)
-            ip = float(rest[5])   # IP: componente corriente constante activa
-            yp = float(rest[7])   # YP: componente admitancia constante activa
+            pl   = float(rest[3])   # PL: constant active power (MW)
+            ip   = float(rest[5])   # IP: constant current active component
+            yp   = float(rest[7])   # YP: constant admittance active component
             ip_total += ip
             yp_total += yp
             loads.append({
@@ -201,9 +205,9 @@ def parse_loads(lines, all_bus_ids, id_to_area):
         except:
             continue
 
-    print(f"  Cargas internacionales excluidas: {n_intl}")
-    print(f"  Verificacion IP total: {ip_total:.1f} MW  (debe ser ~0)")
-    print(f"  Verificacion YP total: {yp_total:.1f} MW  (debe ser ~0)")
+    print(f"  International loads excluded : {n_intl}")
+    print(f"  IP total check : {ip_total:.1f} MW  (should be ~0)")
+    print(f"  YP total check : {yp_total:.1f} MW  (should be ~0)")
     return loads
 
 
@@ -213,9 +217,10 @@ def parse_loads(lines, all_bus_ids, id_to_area):
 
 def bfs_to_model(start_bus, adj, model_bus_ids, id_to_name, id_to_baskv):
     """
-    BFS desde start_bus hasta el primer nodo en model_bus_ids.
-    Retorna (bus_destino, n_saltos, camino_nombres) o (None, None, None).
-    Desempate: si hay multiples destinos al mismo nivel, se elige el de mayor baskv_kv.
+    BFS from start_bus to the first node in model_bus_ids.
+    Returns (bus_destination, n_jumps, path_names) or (None, None, None).
+    Tiebreaking: if multiple destinations found at the same level,
+    choose the one with highest baskv_kv.
     """
     if start_bus in model_bus_ids:
         return start_bus, 0, []
@@ -242,9 +247,9 @@ def bfs_to_model(start_bus, adj, model_bus_ids, id_to_name, id_to_baskv):
         if level_hits:
             best = max(level_hits, key=lambda x: id_to_baskv.get(x[0], 0))
             bus_dest, path = best
-            n_saltos = len(path) - 1
-            camino_names = [id_to_name.get(b, str(b)) for b in path]
-            return bus_dest, n_saltos, camino_names
+            n_jumps      = len(path) - 1
+            path_names   = [id_to_name.get(b, str(b)) for b in path]
+            return bus_dest, n_jumps, path_names
 
     return None, None, None
 
@@ -255,51 +260,51 @@ def bfs_to_model(start_bus, adj, model_bus_ids, id_to_name, id_to_baskv):
 
 def main():
     print("=" * 60)
-    print("10_map_loads.py -- mapeo cargas PSS/E -> modelo")
+    print("10_map_loads.py -- map PSS/E loads to model nodes")
     print("=" * 60)
 
     for f in [RAW_FILE, BUSES_FILE]:
         if not os.path.isfile(f):
-            print(f"[ERROR] Archivo no encontrado:\n  {f}")
+            print(f"[ERROR] File not found:\n  {f}")
             sys.exit(1)
 
-    # --- Cargar buses del modelo ---
+    # --- Load model buses ---
     buses_df          = pd.read_csv(BUSES_FILE)
     model_bus_ids     = set(buses_df['bus_id'].astype(int))
     model_id_to_name  = dict(zip(buses_df['bus_id'].astype(int), buses_df['bus_name']))
     model_id_to_baskv = dict(zip(buses_df['bus_id'].astype(int), buses_df['baskv_kv']))
-    print(f"Nodos del modelo cargados: {len(model_bus_ids)}")
+    print(f"Model nodes loaded: {len(model_bus_ids)}")
 
-    # --- Leer raw ---
-    print(f"\nLeyendo {RAW_FILE}...")
+    # --- Read raw ---
+    print(f"\nReading {RAW_FILE}...")
     with open(RAW_FILE, 'r', encoding='ISO-8859-1') as f:
         raw_lines = f.readlines()
-    print(f"  {len(raw_lines)} lineas")
+    print(f"  {len(raw_lines)} lines")
 
-    # --- Parsear buses completos ---
-    print(f"\nParsando BUS DATA...")
+    # --- Parse full bus data ---
+    print(f"\nParsing BUS DATA...")
     id_to_name, id_to_baskv, id_to_area = parse_all_buses(raw_lines)
     all_bus_ids = set(id_to_name.keys())
-    print(f"  {len(all_bus_ids)} buses totales en el sistema")
+    print(f"  {len(all_bus_ids)} total buses in system")
 
-    # --- Construir grafo ---
-    print(f"\nConstruyendo grafo completo (BRANCH + TRANSFORMER)...")
+    # --- Build graph ---
+    print(f"\nBuilding full graph (BRANCH + TRANSFORMER)...")
     adj = parse_graph(raw_lines)
     n_edges = sum(len(v) for v in adj.values()) // 2
-    print(f"  {len(adj)} nodos con conexiones")
-    print(f"  {n_edges} aristas (todas forzadas in_service)")
+    print(f"  {len(adj)} nodes with connections")
+    print(f"  {n_edges} edges (all forced in_service)")
 
-    # --- Parsear cargas ---
-    print(f"\nParsando LOAD DATA...")
+    # --- Parse loads ---
+    print(f"\nParsing LOAD DATA...")
     loads = parse_loads(raw_lines, all_bus_ids, id_to_area)
-    print(f"  {len(loads)} cargas argentinas")
+    print(f"  {len(loads)} Argentine loads")
 
-    # --- Mapear cargas ---
-    print(f"\nMapeando cargas al modelo...")
-    rows      = []
-    n_directo = 0
-    n_bfs     = 0
-    n_sin_con = 0
+    # --- Map loads ---
+    print(f"\nMapping loads to model nodes...")
+    rows     = []
+    n_direct = 0
+    n_bfs    = 0
+    n_no_con = 0
 
     for load in loads:
         bus_orig  = load['bus_id_origen']
@@ -308,105 +313,105 @@ def main():
         if bus_orig in model_bus_ids:
             rows.append({
                 **load,
-                'bus_name_origen' : orig_name,
-                'match_type'      : 'directo',
-                'bus_destino'     : bus_orig,
-                'bus_destino_name': model_id_to_name[bus_orig],
-                'n_saltos'        : 0,
-                'camino'          : '',
+                'bus_name_origen'    : orig_name,
+                'match_type'         : 'direct',
+                'bus_destination'    : bus_orig,
+                'bus_destination_name': model_id_to_name[bus_orig],
+                'n_jumps'            : 0,
+                'path'               : '',
             })
-            n_directo += 1
+            n_direct += 1
 
         else:
-            bus_dest, n_saltos, camino_names = bfs_to_model(
+            bus_dest, n_jumps, path_names = bfs_to_model(
                 bus_orig, adj, model_bus_ids, id_to_name, id_to_baskv
             )
 
             if bus_dest is not None:
-                camino_str = ' -> '.join(camino_names) if camino_names else ''
+                path_str = ' -> '.join(path_names) if path_names else ''
                 rows.append({
                     **load,
-                    'bus_name_origen' : orig_name,
-                    'match_type'      : 'bfs',
-                    'bus_destino'     : bus_dest,
-                    'bus_destino_name': model_id_to_name.get(bus_dest, str(bus_dest)),
-                    'n_saltos'        : n_saltos,
-                    'camino'          : camino_str,
+                    'bus_name_origen'    : orig_name,
+                    'match_type'         : 'bfs',
+                    'bus_destination'    : bus_dest,
+                    'bus_destination_name': model_id_to_name.get(bus_dest, str(bus_dest)),
+                    'n_jumps'            : n_jumps,
+                    'path'               : path_str,
                 })
                 n_bfs += 1
             else:
                 rows.append({
                     **load,
-                    'bus_name_origen' : orig_name,
-                    'match_type'      : 'sin_conexion',
-                    'bus_destino'     : '',
-                    'bus_destino_name': '',
-                    'n_saltos'        : -1,
-                    'camino'          : '',
+                    'bus_name_origen'    : orig_name,
+                    'match_type'         : 'no_connection',
+                    'bus_destination'    : '',
+                    'bus_destination_name': '',
+                    'n_jumps'            : -1,
+                    'path'               : '',
                 })
-                n_sin_con += 1
+                n_no_con += 1
 
     df = pd.DataFrame(rows)
     df = df[[
         'load_key', 'bus_id_origen', 'bus_name_origen',
         'pl_mw', 'stat',
-        'match_type', 'bus_destino', 'bus_destino_name',
-        'n_saltos', 'camino',
+        'match_type', 'bus_destination', 'bus_destination_name',
+        'n_jumps', 'path',
     ]]
 
     # ==========================================================
-    # REPORTE
+    # SUMMARY
     # ==========================================================
     print(f"\n{'='*60}")
-    print(f"RESUMEN")
+    print(f"SUMMARY")
     print(f"{'='*60}")
-    print(f"  Total cargas              : {len(df)}")
-    print(f"  directo                   : {n_directo}  ({n_directo/len(df)*100:.1f}%)")
+    print(f"  Total loads               : {len(df)}")
+    print(f"  direct                    : {n_direct}  ({n_direct/len(df)*100:.1f}%)")
     print(f"  bfs                       : {n_bfs}  ({n_bfs/len(df)*100:.1f}%)")
-    print(f"  sin_conexion              : {n_sin_con}  ({n_sin_con/len(df)*100:.1f}%)")
+    print(f"  no_connection             : {n_no_con}  ({n_no_con/len(df)*100:.1f}%)")
 
     activas = df[df['stat'] == 1]
-    print(f"\n  Balance PL snapshot (solo STAT=1):")
+    print(f"\n  PL balance snapshot (stat=1 only):")
     print(f"    PL total                : {activas['pl_mw'].sum():>10,.1f} MW")
-    print(f"    PL directo              : {activas[activas['match_type']=='directo']['pl_mw'].sum():>10,.1f} MW")
+    print(f"    PL direct               : {activas[activas['match_type']=='direct']['pl_mw'].sum():>10,.1f} MW")
     print(f"    PL bfs                  : {activas[activas['match_type']=='bfs']['pl_mw'].sum():>10,.1f} MW")
-    print(f"    PL sin_conexion         : {activas[activas['match_type']=='sin_conexion']['pl_mw'].sum():>10,.1f} MW")
+    print(f"    PL no_connection        : {activas[activas['match_type']=='no_connection']['pl_mw'].sum():>10,.1f} MW")
 
-    print(f"\n  Distribucion de n_saltos (solo bfs):")
+    print(f"\n  BFS hops distribution:")
     bfs_df = df[df['match_type'] == 'bfs']
-    for saltos, grp in bfs_df.groupby('n_saltos'):
+    for jumps, grp in bfs_df.groupby('n_jumps'):
         pl = grp[grp['stat']==1]['pl_mw'].sum()
-        print(f"    {saltos:>2} salto(s): {len(grp):>4} cargas   PL={pl:>8,.1f} MW")
+        print(f"    {jumps:>2} hop(s): {len(grp):>4} loads   PL={pl:>8,.1f} MW")
 
-    print(f"\n  Cargas sin_conexion ({n_sin_con}) — aisladas del modelo:")
-    sin = df[df['match_type'] == 'sin_conexion']
+    print(f"\n  No_connection loads ({n_no_con}) — isolated from model:")
+    sin = df[df['match_type'] == 'no_connection']
     if sin.empty:
-        print(f"    ninguna")
+        print(f"    none")
     else:
         pl_sin = sin[sin['stat']==1]['pl_mw'].sum()
-        print(f"    PL total aislada (STAT=1): {pl_sin:,.1f} MW")
-        print(f"    Buses de origen:")
+        print(f"    Total isolated PL (stat=1): {pl_sin:,.1f} MW")
+        print(f"    Origin buses:")
         for bus_id, grp in sin.groupby('bus_id_origen'):
             pl = grp[grp['stat']==1]['pl_mw'].sum()
             print(f"      bus={bus_id:<6} {grp['bus_name_origen'].iloc[0]:<20} "
-                  f"{len(grp)} carga(s)  PL={pl:.1f} MW")
+                  f"{len(grp)} load(s)  PL={pl:.1f} MW")
 
-    print(f"\n  Top 10 nodos por carga total recibida (PL, STAT=1):")
-    valid = df[(df['bus_destino'] != '') & (df['stat'] == 1)].copy()
-    top = (valid.groupby('bus_destino_name')
-               .agg(n_cargas=('load_key', 'count'), pl_total=('pl_mw', 'sum'))
+    print(f"\n  Top 10 nodes by total received load (PL, stat=1):")
+    valid = df[(df['bus_destination'] != '') & (df['stat'] == 1)].copy()
+    top = (valid.groupby('bus_destination_name')
+               .agg(n_loads=('load_key', 'count'), pl_total=('pl_mw', 'sum'))
                .sort_values('pl_total', ascending=False)
                .head(10))
     for name, row in top.iterrows():
-        print(f"    {name:<30}: {row['n_cargas']:>4.0f} cargas   {row['pl_total']:>8,.1f} MW")
+        print(f"    {name:<30}: {row['n_loads']:>4.0f} loads   {row['pl_total']:>8,.1f} MW")
 
     # ==========================================================
-    # EXPORTAR
+    # EXPORT
     # ==========================================================
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df.to_csv(OUTPUT_CSV, index=False)
-    print(f"\n✔ {OUTPUT_CSV}  ({len(df)} filas)")
-    print(f"\nProximo: 10b_visualize_qgis.py")
+    print(f"\n✔ {OUTPUT_CSV}  ({len(df)} rows)")
+    print("Next: 10b_visualize_qgis.py")
 
 
 if __name__ == "__main__":

@@ -1,42 +1,42 @@
 """
 06_match_geosadi_geometry.py
-Asigna geometria (WKT) a las lineas 500 kV del PSS/E matcheando contra
-el layer lineas_alta_tension del GeoSADI.
+Assigns WKT(well-known text) geometry to 500 kV PSS/E lines by matching against the
+lineas_alta_tension layer from GeoSADI.
 
-Depende de:
-    buses_final.csv        (output script 05)
-    lines_500kv_raw.csv          (output script 02)
-    manual_line_mappings.csv     (diccionario line_key -> geosadi_line_id)
-    lineas_alta_tension.geojson  (GeoSADI)
-    aliases_500kv.py             (mismo directorio que este script)
+Depends : data/network_500kv/buses_final.csv          (script 05)
+          data/network_500kv/lines_500kv_raw.csv       (script 02)
+          data/network_500kv/manual_line_mappings.csv  (manual matching dictionary — versioned in repo)
+              Created to resolve lines that could not be matched automatically,
+              either due to naming inconsistencies between PSS/E and GeoSADI,
+              or ambiguous parallel circuits.
+          GEOSADI/GEOJSON/lineas_alta_tension.geojson  (external — download from GitHub Releases, place in external_data_dir/GEOSADI/GEOJSON/)
+          aliases_500kv.py                             (same directory as this script)
+Output  : data/network_500kv/lines_500kv_final.csv
 
-Output:
-    lines_500kv_final.csv
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/06_match_geosadi_geometry.py
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/06_match_geosadi_geometry.py
+Matching logic:
 
-Logica de matching:
+    STEP 0 — before any path:
+        If element_type == 'series_compensator'
+            -> geometry = '', match_status = 'series_compensator', continue
 
-    PASO 0 — antes que cualquier camino:
-        Si element_type == 'series_compensator'
-            -> geometry = '', match_status = 'compensador', continuar
-
-    PASO 1 — diccionario manual:
-        Si line_key esta en manual_line_mappings.csv
-            -> asignar geometria por geosadi_line_id
+    STEP 1 — manual dictionary:
+        If line_key is in manual_line_mappings.csv
+            -> assign geometry by geosadi_line_id
             -> match_status = 'manual_geo'
 
-    CAMINO A — ambos buses tienen name_geosadi:
-        Matching por nombre usando aliases_500kv.py.
-        ckt A/B/C se mapea a 1/2/3 para desambiguar lineas paralelas.
-        1 candidato                  -> match_status = 'directo'
-        Multiples (lineas paralelas) -> desambiguar por numero de ckt
-                                     -> match_status = 'paralela'
-        Sin candidato                -> match_status = 'sin_match'
+    PATH A — both buses have name_geosadi:
+        Name-based matching using aliases_500kv.py.
+        ckt A/B/C is mapped to 1/2/3 to disambiguate parallel lines.
+        1 candidate                  -> match_status = 'direct'
+        Multiple (parallel lines)    -> disambiguate by circuit number
+                                     -> match_status = 'parallel'
+        No candidate                 -> match_status = 'no_match'
 
-    CAMINO B — bus sin name_geosadi sin entrada en diccionario manual:
-        -> geometry = '', match_status = 'pendiente_bus'
+    PATH B — bus without name_geosadi and not in manual dictionary:
+        -> geometry = '', match_status = 'pending_bus'
 """
 
 import os
@@ -45,6 +45,8 @@ import json
 import unicodedata
 import csv
 import re
+from pathlib import Path
+import yaml
 
 import pandas as pd
 
@@ -52,21 +54,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aliases_500kv import ALIASES
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-DATA_DIR      = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-GEOJSON_FILE  = "/mnt/c/Work/pypsa-ar-sandbox/Official data/GEOSADI/GEOJSON/lineas_alta_tension.geojson"
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR     = Path(_cfg["repo_dir"])
+EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
-BUSES_FINAL   = os.path.join(DATA_DIR, "buses_final.csv")
-LINES_RAW     = os.path.join(DATA_DIR, "lines_500kv_raw.csv")
-MANUAL_MAP    = os.path.join(DATA_DIR, "manual_line_mappings.csv")
-OUTPUT_FILE   = os.path.join(DATA_DIR, "lines_500kv_final.csv")
-
+GEOJSON_FILE = EXTERNAL_DIR / "GEOSADI/GEOJSON/lineas_alta_tension.geojson"
+BUSES_FINAL  = REPO_DIR / "data/network_500kv/buses_final.csv"
+LINES_RAW    = REPO_DIR / "data/network_500kv/lines_500kv_raw.csv"
+MANUAL_MAP   = REPO_DIR / "data/network_500kv/manual_line_mappings.csv"
+OUTPUT_FILE  = REPO_DIR / "data/network_500kv/lines_500kv_final.csv"
 
 
 # =============================================================================
-# NORMALIZACION Y ALIASES
+# NORMALIZATION AND ALIASES
 # =============================================================================
 
 def normalize(text):
@@ -82,13 +85,13 @@ def normalize(text):
 
 def normalize_geosadi_name(nombre):
     """
-    Normaliza el Nombre de una linea GeoSADI y extrae tokens resueltos via aliases.
-    Devuelve set de nombres canonicos de estaciones.
+    Normalizes a GeoSADI line name and extracts tokens resolved via aliases.
+    Returns a set of canonical substation names.
     """
     clean = re.sub(r'\s+500\s*\d*\s*$', '', nombre.strip())
     norm  = normalize(clean)
     tokens = norm.split()
-    resueltos = set()
+    resolved = set()
     used = set()
 
     for size in range(4, 0, -1):
@@ -101,19 +104,19 @@ def normalize_geosadi_name(nombre):
             if token in ALIASES:
                 val = ALIASES[token]
                 if val is not None:
-                    resueltos.add(normalize(val))
+                    resolved.add(normalize(val))
                 used |= pos
             elif token_sp in ALIASES:
                 val = ALIASES[token_sp]
                 if val is not None:
-                    resueltos.add(normalize(val))
+                    resolved.add(normalize(val))
                 used |= pos
 
     remaining_pos = set(range(len(tokens))) - used
     for i in remaining_pos:
-        resueltos.add(tokens[i])
+        resolved.add(tokens[i])
 
-    return resueltos
+    return resolved
 
 
 def get_circuit_number(nombre):
@@ -122,7 +125,7 @@ def get_circuit_number(nombre):
 
 
 # =============================================================================
-# GEOMETRIA
+# GEOMETRY
 # =============================================================================
 
 def geom_to_coords(geom):
@@ -151,34 +154,34 @@ def coords_to_wkt(coords):
 
 def main():
     print("=" * 60)
-    print("04_match_geosadi_geometry.py -- geometria GeoSADI a lineas 500 kV")
+    print("06_match_geosadi_geometry.py -- GeoSADI geometry to 500 kV lines")
     print("=" * 60)
 
     for f in [BUSES_FINAL, LINES_RAW, GEOJSON_FILE, MANUAL_MAP]:
         if not os.path.isfile(f):
-            print(f"[ERROR] Archivo no encontrado:\n  {f}")
+            print(f"[ERROR] File not found:\n  {f}")
             return
 
-    # --- Cargar buses ---
+    # --- Load buses ---
     bus_to_geosadi = {}
     with open(BUSES_FINAL, encoding='utf-8') as f:
         for row in csv.DictReader(f):
             bid = int(row['bus_id'])
             bus_to_geosadi[bid] = normalize(row.get('name_geosadi', '') or '')
 
-    # --- Cargar diccionario manual line_key -> geosadi_line_id ---
+    # --- Load manual dictionary line_key -> geosadi_line_id ---
     manual_map = {}
     df_manual = pd.read_csv(MANUAL_MAP)
     for _, row in df_manual.iterrows():
         manual_map[row['line_key'].strip()] = int(row['geosadi_line_id'])
-    print(f"\nDiccionario manual cargado: {len(manual_map)} entradas")
+    print(f"\nManual dictionary loaded  : {len(manual_map)} entries")
 
-    # --- Cargar lineas PSS/E ---
+    # --- Load PSS/E lines ---
     with open(LINES_RAW, encoding='utf-8') as f:
         lines = list(csv.DictReader(f))
-    print(f"Lineas PSS/E cargadas     : {len(lines)}")
+    print(f"PSS/E lines loaded        : {len(lines)}")
 
-    # --- Cargar GeoJSON ---
+    # --- Load GeoJSON ---
     with open(GEOJSON_FILE, encoding='utf-8') as f:
         gj = json.load(f)
 
@@ -186,9 +189,9 @@ def main():
         feat for feat in gj['features']
         if feat.get('geometry') and feat['properties'].get('Tension') == 500
     ]
-    print(f"Lineas GeoSADI 500 kV     : {len(geo_lines_500)}")
+    print(f"GeoSADI 500 kV lines      : {len(geo_lines_500)}")
 
-    # Pre-procesar GeoSADI
+    # Pre-process GeoSADI entries
     geo_by_id   = {}
     geo_by_name = []
 
@@ -209,13 +212,13 @@ def main():
         geo_by_name.append(entry)
 
     # --- Matching ---
-    conteo = {
-        'directo'       : 0,
-        'paralela'      : 0,
-        'manual_geo'    : 0,
-        'compensador'   : 0,
-        'pendiente_bus' : 0,
-        'sin_match'     : 0,
+    count = {
+        'direct'           : 0,
+        'parallel'         : 0,
+        'manual_geo'       : 0,
+        'series_compensator': 0,
+        'pending_bus'      : 0,
+        'no_match'         : 0,
     }
     output_rows = []
 
@@ -227,15 +230,15 @@ def main():
         lkey   = line['line_key']
 
         # -------------------------------------------------------
-        # PASO 0 — compensadores siempre primero
+        # STEP 0 — series compensators always first
         # -------------------------------------------------------
         if etype == 'series_compensator':
             row = dict(line)
             row['geo_nombre']   = ''
-            row['match_status'] = 'compensador'
+            row['match_status'] = 'series_compensator'
             row['geometry']     = ''
             output_rows.append(row)
-            conteo['compensador'] += 1
+            count['series_compensator'] += 1
             continue
 
         try:
@@ -244,7 +247,7 @@ def main():
             ckt_num = None
 
         # -------------------------------------------------------
-        # PASO 1 — diccionario manual
+        # STEP 1 — manual dictionary
         # -------------------------------------------------------
         if lkey in manual_map:
             geosadi_lid = manual_map[lkey]
@@ -255,47 +258,47 @@ def main():
                 row['match_status'] = 'manual_geo'
                 row['geometry']     = geo_entry['wkt']
             else:
-                row['geo_nombre']   = f'ID {geosadi_lid} no encontrado en GeoSADI'
+                row['geo_nombre']   = f'ID {geosadi_lid} not found in GeoSADI'
                 row['match_status'] = 'manual_geo'
                 row['geometry']     = ''
-                print(f"  [WARN] {lkey} — geosadi_line_id={geosadi_lid} no existe en GeoJSON")
+                print(f"  [WARN] {lkey} — geosadi_line_id={geosadi_lid} not found in GeoJSON")
             output_rows.append(row)
-            conteo['manual_geo'] += 1
+            count['manual_geo'] += 1
             continue
 
         geo_i = bus_to_geosadi.get(bid_i, '')
         geo_j = bus_to_geosadi.get(bid_j, '')
 
         # -------------------------------------------------------
-        # CAMINO A — ambos buses tienen name_geosadi
+        # PATH A — both buses have name_geosadi
         # -------------------------------------------------------
         if geo_i and geo_j:
-            candidatos = [
+            candidates = [
                 g for g in geo_by_name
                 if geo_i in g['tokens'] and geo_j in g['tokens']
             ]
 
-            if len(candidatos) == 0:
+            if len(candidates) == 0:
                 row = dict(line)
                 row['geo_nombre']   = ''
-                row['match_status'] = 'sin_match'
+                row['match_status'] = 'no_match'
                 row['geometry']     = ''
                 output_rows.append(row)
-                conteo['sin_match'] += 1
+                count['no_match'] += 1
 
-            elif len(candidatos) == 1:
-                g = candidatos[0]
+            elif len(candidates) == 1:
+                g = candidates[0]
                 row = dict(line)
                 row['geo_nombre']   = g['nombre']
-                row['match_status'] = 'directo'
+                row['match_status'] = 'direct'
                 row['geometry']     = g['wkt']
                 output_rows.append(row)
-                conteo['directo'] += 1
+                count['direct'] += 1
 
             else:
                 match = None
                 if ckt_num is not None:
-                    for c in candidatos:
+                    for c in candidates:
                         if c['ckt_num'] == ckt_num:
                             match = c
                             break
@@ -303,74 +306,43 @@ def main():
                 if match:
                     row = dict(line)
                     row['geo_nombre']   = match['nombre']
-                    row['match_status'] = 'paralela'
+                    row['match_status'] = 'parallel'
                     row['geometry']     = match['wkt']
                     output_rows.append(row)
-                    conteo['paralela'] += 1
+                    count['parallel'] += 1
                 else:
                     row = dict(line)
-                    row['geo_nombre']   = f"AMBIGUO: {candidatos[0]['nombre']}"
-                    row['match_status'] = 'sin_match'
+                    row['geo_nombre']   = f"AMBIGUOUS: {candidates[0]['nombre']}"
+                    row['match_status'] = 'no_match'
                     row['geometry']     = ''
                     output_rows.append(row)
-                    conteo['sin_match'] += 1
-                    print(f"  [AMBIGUO] {lkey}  ckt={ckt}  candidatos: {[c['nombre'] for c in candidatos]}")
+                    count['no_match'] += 1
 
         # -------------------------------------------------------
-        # CAMINO B — bus sin name_geosadi sin entrada en diccionario manual
+        # PATH B — bus without name_geosadi
         # -------------------------------------------------------
         else:
             row = dict(line)
             row['geo_nombre']   = ''
-            row['match_status'] = 'pendiente_bus'
+            row['match_status'] = 'pending_bus'
             row['geometry']     = ''
             output_rows.append(row)
-            conteo['pendiente_bus'] += 1
+            count['pending_bus'] += 1
 
-    # --- Exportar ---
-    if not output_rows:
-        print("[ERROR] Sin filas para exportar")
-        return
+    # --- Summary ---
+    print(f"\n{'='*60}")
+    print(f"MATCHING SUMMARY")
+    print(f"{'='*60}")
+    for status, n in count.items():
+        print(f"  {status:<22}: {n}")
+    print(f"  {'TOTAL':<22}: {sum(count.values())}")
 
-    fieldnames = list(output_rows[0].keys())
-    for col in ['geo_nombre', 'match_status', 'geometry']:
-        if col in fieldnames:
-            fieldnames.remove(col)
-    fieldnames += ['geo_nombre', 'match_status', 'geometry']
+    # --- Export ---
+    df_out = pd.DataFrame(output_rows)
+    df_out.to_csv(OUTPUT_FILE, index=False)
 
-    with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(output_rows)
-
-    # --- Reporte ---
-    print("\n" + "=" * 60)
-    print("RESUMEN")
-    print("=" * 60)
-    print(f"  directo        : {conteo['directo']}")
-    print(f"  paralela       : {conteo['paralela']}")
-    print(f"  manual_geo     : {conteo['manual_geo']}")
-    print(f"  compensador    : {conteo['compensador']}")
-    print(f"  pendiente_bus  : {conteo['pendiente_bus']}")
-    print(f"  sin_match      : {conteo['sin_match']}")
-    print(f"  TOTAL          : {len(output_rows)}")
-
-    sin_match = [r for r in output_rows if r['match_status'] == 'sin_match']
-    if sin_match:
-        print(f"\nLineas sin geometria ({len(sin_match)}) — revisar aliases_500kv.py:")
-        for r in sin_match:
-            gi = bus_to_geosadi.get(int(r['bus_i']), '?')
-            gj = bus_to_geosadi.get(int(r['bus_j']), '?')
-            print(f"  {r['line_key']:<42}  [{gi}] — [{gj}]")
-
-    pendiente = [r for r in output_rows if r['match_status'] == 'pendiente_bus']
-    if pendiente:
-        print(f"\nLineas pendiente_bus ({len(pendiente)}) — buses sin name_geosadi ni mapeo manual:")
-        for r in pendiente:
-            print(f"  {r['line_key']:<42}  bus_i={r['bus_i']}  bus_j={r['bus_j']}")
-
-    print(f"\n✔ {OUTPUT_FILE}  ({len(output_rows)} filas)")
-    print("Proximo: 07_validate_topology.py")
+    print(f"\n✔ {OUTPUT_FILE}  ({len(df_out)} rows)")
+    print("Next: 07_validate_topology.py")
 
 
 if __name__ == "__main__":

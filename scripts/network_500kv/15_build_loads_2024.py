@@ -1,104 +1,110 @@
 """
 15_build_loads_2024.py
-Construye la tabla de demanda horaria 2024 por bus 500 kV en formato largo.
+Builds the 2024 hourly demand table by 500 kV bus in long format.
 
 Inputs:
-    Official data/Dda_horaria_x_trafo_2024.csv  (archivo externo a GitHub)
-        Demanda horaria 2024 por trafo. Formato ancho: una fila por trafo,
-        8784 columnas de valores horarios en MW.
-        Encabezado multi-nivel de 4 filas:
-            Fila 1: hora del dia (1-24)
-            Fila 2: hora acumulada del anio (1-8784)
-            Fila 3: fecha calendario
-            Fila 4: nombres de columnas de metadata + etiquetas de mes
+    Official data/Dda_horaria_x_trafo_2024.csv  (external — download from GitHub Releases, place in external_data_dir/)
+        Hourly demand by transformer for 2024. Wide format: one row per transformer,
+        8784 hourly value columns in MW.
+        4-row multi-level header:
+            Row 1: hour of day (1-24)
+            Row 2: cumulative hour of year (1-8784)
+            Row 3: calendar date
+            Row 4: metadata column names + month labels
     data/network_500kv/buses_final.csv
     data/network_500kv/lines_500kv_final.csv
-        Se usa para calcular el mapa de fusion de acopladores de barra,
-        replicando la logica del script 08. Los buses fusionados en el
-        network reciben la demanda acumulada de todos los buses colapsados.
+        Used to compute the bus coupler fusion map, replicating the logic
+        from script 08. Buses fused in the network receive the aggregated
+        demand of all buses collapsed onto them.
 
 Output:
     data/network_500kv/loads_2024.csv
-        Formato largo: una fila por bus 500 kV por hora.
-        Columnas: bus_id, bus_name, datetime, p_mw
-        ~95 buses x 8784 horas = ~834.000 filas
+        Long format: one row per 500 kV bus per hour.
+        Columns: bus_id, bus_name, datetime, p_mw
+        ~72 buses x 8784 hours
 
-Logica:
-    1. Parsear encabezado para construir el indice datetime de las 8784 columnas
-       usando fecha (fila 3) + hora del dia (fila 1).
-    2. Leer cuerpo de datos con columnas de metadata + valores horarios.
-    3. Pivotear a formato largo por trafo.
-    4. Agrupar por bus_id + datetime sumando todos los trafos del mismo
-       bus 500 kV.
-    5. Verificar cobertura contra buses_final.csv.
-    6. Exportar loads_2024.csv.
+Logic:
+    1. Parse the header to build the datetime index of the 8784 hourly columns
+       using date (row 3) + hour of day (row 1).
+    2. Read the data body with metadata columns + hourly values.
+    3. Pivot to long format by transformer.
+    4. Group by bus_id + datetime, summing all transformers connected to the same
+       500 kV bus.
+    5. Verify coverage against buses_final.csv.
+    6. Export loads_2024.csv.
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/15_build_loads_2024.py
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/15_build_loads_2024.py
 """
 
 import os
 import sys
+from pathlib import Path
+
 import pandas as pd
-import numpy as np
+import yaml
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-DDA_FILE    = "/mnt/c/Work/pypsa-ar-sandbox/Official data/Dda_horaria_x_trafo_2024.csv"
-BUSES_FILE  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/buses_final.csv"
-LINES_FILE  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv/lines_500kv_final.csv" 
-OUTPUT_DIR  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "loads_2024.csv")
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR = Path(_cfg["repo_dir"])
+EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
-# Columnas de metadata en fila 4 (indices 0-25)
+DDA_FILE = EXTERNAL_DIR / "Dda_horaria_x_trafo_2024.csv"
+BUSES_FILE = REPO_DIR / "data/network_500kv/buses_final.csv"
+LINES_FILE = REPO_DIR / "data/network_500kv/lines_500kv_final.csv"
+OUTPUT_DIR = REPO_DIR / "data/network_500kv"
+OUTPUT_FILE = OUTPUT_DIR / "loads_2024.csv"
+
+# Metadata columns in header row 4 (indices 0-25)
 N_META_COLS = 26
 
-# Columnas de metadata que se conservan
-COLS_META = ['trafo_id', 'bus_id', 'bus_name']
+# Metadata columns kept from the source file
+COLS_META = ["trafo_id", "bus_id", "bus_name"]
 
 
 # =============================================================================
-# FUNCIONES AUXILIARES
+# FUNCTIONS
 # =============================================================================
 
-def construir_datetimes(fila_fecha, fila_hora):
+def build_datetimes(row_date, row_hour):
     """
-    Construye una lista de timestamps a partir de los vectores de fecha y hora
-    del encabezado del archivo.
+    Builds a list of timestamps from the date and hour vectors
+    in the file header.
 
-    fila_fecha: lista de strings tipo '1/1/2024', '1/1/2024', ..., '31/12/2024'
-    fila_hora : lista de strings tipo '1', '2', ..., '24'
+    row_date: list of strings like '1/1/2024', '1/1/2024', ..., '31/12/2024'
+    row_hour: list of strings like '1', '2', ..., '24'
     """
-    datetimes = []
-    for fecha_str, hora_str in zip(fila_fecha, fila_hora):
-        if fecha_str == 'nan' or hora_str == 'nan':
+    timestamps = []
+    for date_str, hour_str in zip(row_date, row_hour):
+        if date_str == "nan" or hour_str == "nan":
             continue
-        fecha = pd.to_datetime(fecha_str.strip(), dayfirst=True, errors='coerce')
-        hora  = int(hora_str) - 1  # HORA=1 -> 00:00, HORA=24 -> 23:00
-        datetimes.append(fecha + pd.Timedelta(hours=hora))
-    return datetimes
+        date = pd.to_datetime(date_str.strip(), dayfirst=True, errors="coerce")
+        hour = int(hour_str) - 1  # HOUR=1 -> 00:00, HOUR=24 -> 23:00
+        timestamps.append(date + pd.Timedelta(hours=hour))
+    return timestamps
 
 
 # =============================================================================
-# FUSION MAP — replica la logica Union-Find del script 08
-# Los buses fusionados en el network deben recibir la demanda acumulada
-# de todos los buses que fueron colapsados sobre ellos.
+# FUSION MAP — replicates the Union-Find logic from script 08
+# Fused buses in the network must receive the aggregated demand
+# of all buses collapsed onto them.
 # =============================================================================
 
-def calcular_fusion_map(buses, lines):
+def compute_fusion_map(buses, lines):
     """
-    Detecta acopladores de barra (series_compensator con r_pu=0) y calcula
-    el mapa bus_name -> bus_name_representante usando Union-Find.
-    Es la misma logica que el bloque [1b] del script 08.
+    Detects bus couplers (series_compensator with r_pu=0) and computes
+    the map bus_name -> representative_bus_name using Union-Find.
+    This is the same logic as block [1b] in script 08.
     """
-    id_to_name = dict(zip(buses['bus_id'].astype(int), buses['bus_name']))
-    all_bus_ids = set(buses['bus_id'].astype(int))
+    id_to_name = dict(zip(buses["bus_id"].astype(int), buses["bus_name"]))
+    all_bus_ids = set(buses["bus_id"].astype(int))
 
     couplers = lines[
-        (lines['element_type'] == 'series_compensator') &
-        (lines['r_pu'] == 0.0)
+        (lines["element_type"] == "series_compensator") &
+        (lines["r_pu"] == 0.0)
     ]
 
     parent = {}
@@ -121,15 +127,15 @@ def calcular_fusion_map(buses, lines):
         parent[rb] = ra
 
     for _, row in couplers.iterrows():
-        union(str(int(row['bus_i'])), str(int(row['bus_j'])))
+        union(str(int(row["bus_i"])), str(int(row["bus_j"])))
 
-    all_bus_id_strs = set(str(bid) for bid in all_bus_ids)
-    fusion_map_ids  = {b: find(b) for b in all_bus_id_strs if find(b) != b}
+    all_bus_id_strs = {str(bid) for bid in all_bus_ids}
+    fusion_map_ids = {b: find(b) for b in all_bus_id_strs if find(b) != b}
 
     fusion_map = {}
     for child_id_str, root_id_str in fusion_map_ids.items():
         child_name = id_to_name.get(int(child_id_str))
-        root_name  = id_to_name.get(int(root_id_str))
+        root_name = id_to_name.get(int(root_id_str))
         if child_name and root_name:
             fusion_map[child_name] = root_name
 
@@ -142,165 +148,186 @@ def calcular_fusion_map(buses, lines):
 
 def main():
     print("=" * 60)
-    print("15_build_loads_2024.py -- demanda horaria 2024 por bus")
+    print("15_build_loads_2024.py -- 2024 hourly demand by bus")
     print("=" * 60)
 
     for f in [DDA_FILE, BUSES_FILE, LINES_FILE]:
         if not os.path.isfile(f):
-            print(f"[ERROR] Archivo no encontrado:\n  {f}")
+            print(f"[ERROR] File not found:\n  {f}")
             sys.exit(1)
 
-    # Calcular fusion_map al inicio para usarlo en el paso 4
-    buses_df   = pd.read_csv(BUSES_FILE)
-    lines_df   = pd.read_csv(LINES_FILE)
-    fusion_map = calcular_fusion_map(buses_df, lines_df)
-    print(f"  Buses fusionados detectados: {len(fusion_map)}")
+    # Compute fusion_map upfront to apply it in step 4
+    buses_df = pd.read_csv(BUSES_FILE)
+    lines_df = pd.read_csv(LINES_FILE)
+    fusion_map = compute_fusion_map(buses_df, lines_df)
+    print(f"  Fused buses detected: {len(fusion_map)}")
 
     # =========================================================
-    # 1. PARSEAR ENCABEZADO — construir indice datetime
+    # 1. PARSE HEADER — build datetime index
     # =========================================================
-    print("\n[1/5] Parseando encabezado ...")
+    print("\n[1/5] Parsing header ...")
 
     header_raw = pd.read_csv(
-        DDA_FILE, sep=';', encoding='latin-1',
-        header=None, nrows=4
+        DDA_FILE,
+        sep=";",
+        encoding="latin-1",
+        header=None,
+        nrows=4,
     )
 
-    # Extraer vectores de fecha y hora para las columnas de valores
-    fila_hora  = header_raw.iloc[0, N_META_COLS:].astype(str).tolist()
-    fila_fecha = header_raw.iloc[2, N_META_COLS:].astype(str).tolist()
+    # Extract date and hour vectors for the value columns
+    row_hour = header_raw.iloc[0, N_META_COLS:].astype(str).tolist()
+    row_date = header_raw.iloc[2, N_META_COLS:].astype(str).tolist()
 
-    datetimes = construir_datetimes(fila_fecha, fila_hora)
-    n_horas   = len(datetimes)
+    timestamps = build_datetimes(row_date, row_hour)
+    n_hours = len(timestamps)
 
-    print(f"  Horas en el archivo : {n_horas}")
-    print(f"  Rango               : {datetimes[0]}  ->  {datetimes[-1]}")
+    print(f"  Hours in file       : {n_hours}")
+    print(f"  Range               : {timestamps[0]}  ->  {timestamps[-1]}")
 
-    if n_horas != 8784:
-        print(f"  [AVISO] Se esperaban 8784 horas (2024 bisiesto)")
+    if n_hours != 8784:
+        print("  [WARNING] Expected 8784 hours (leap year 2024)")
 
-    n_nat = sum(1 for dt in datetimes if pd.isna(dt))
+    n_nat = sum(1 for ts in timestamps if pd.isna(ts))
     if n_nat > 0:
-        print(f"  [AVISO] {n_nat} timestamps NaT — revisar encabezado")
+        print(f"  [WARNING] {n_nat} NaT timestamps — check header")
 
     # =========================================================
-    # 2. LEER CUERPO DE DATOS
+    # 2. READ DATA BODY
     # =========================================================
-    print(f"\n[2/5] Leyendo cuerpo de datos ...")
+    print("\n[2/5] Reading data body ...")
 
-    # Nombres de columnas: metadata desde fila 4 + datetimes para el resto
-    col_names_meta   = header_raw.iloc[3, :N_META_COLS].tolist()
-    col_names_horas  = [str(dt) for dt in datetimes]
-    # El archivo tiene columnas vacías al final — agregar dummy para alinear
-    n_cols_archivo   = pd.read_csv(DDA_FILE, sep=';', encoding='latin-1',
-                                   header=None, nrows=1).shape[1]
-    n_dummy          = n_cols_archivo - N_META_COLS - len(col_names_horas)
-    col_names_dummy  = [f'_dummy_{i}' for i in range(n_dummy)]
-    col_names        = col_names_meta + col_names_horas + col_names_dummy
+    # Column names: metadata from row 4 + timestamps for the remaining columns
+    col_names_meta = header_raw.iloc[3, :N_META_COLS].tolist()
+    col_names_hours = [str(ts) for ts in timestamps]
+
+    # The file may contain trailing empty columns — add dummy names to align
+    n_file_cols = pd.read_csv(
+        DDA_FILE,
+        sep=";",
+        encoding="latin-1",
+        header=None,
+        nrows=1,
+    ).shape[1]
+
+    n_dummy = n_file_cols - N_META_COLS - len(col_names_hours)
+    col_names_dummy = [f"_dummy_{i}" for i in range(n_dummy)]
+    col_names = col_names_meta + col_names_hours + col_names_dummy
 
     df = pd.read_csv(
-        DDA_FILE, sep=';', encoding='latin-1',
-        header=None, skiprows=4,
+        DDA_FILE,
+        sep=";",
+        encoding="latin-1",
+        header=None,
+        skiprows=4,
         names=col_names,
         low_memory=False,
     )
 
-    # Eliminar fila final vacia si existe
-    df = df.dropna(subset=['trafo_id'])
-    df['trafo_id'] = df['trafo_id'].astype(int)
-    df['bus_id']   = pd.to_numeric(df['bus_id'], errors='coerce').astype('Int64')
+    # Drop trailing empty row if present
+    df = df.dropna(subset=["trafo_id"])
+    df["trafo_id"] = df["trafo_id"].astype(int)
+    df["bus_id"] = pd.to_numeric(df["bus_id"], errors="coerce").astype("Int64")
 
-    print(f"  Trafos leidos       : {len(df)}")
-    print(f"  bus_id unicos       : {df['bus_id'].nunique()}")
+    print(f"  Transformers read   : {len(df)}")
+    print(f"  Unique bus_id       : {df['bus_id'].nunique()}")
 
     # =========================================================
-    # 3. PIVOTEAR A FORMATO LARGO
+    # 3. PIVOT TO LONG FORMAT
     # =========================================================
-    print(f"\n[3/5] Pivoteando a formato largo ...")
+    print("\n[3/5] Pivoting to long format ...")
 
-    # Convertir columnas horarias a numerico
-    hora_cols = col_names_horas
-    df[hora_cols] = df[hora_cols].apply(pd.to_numeric, errors='coerce')
+    # Convert hourly columns to numeric
+    hour_cols = col_names_hours
+    df[hour_cols] = df[hour_cols].apply(pd.to_numeric, errors="coerce")
 
-    # Melt: una fila por trafo por hora
-    df_long = df[['trafo_id', 'bus_id', 'bus_name'] + hora_cols].melt(
-        id_vars=['trafo_id', 'bus_id', 'bus_name'],
-        var_name='datetime',
-        value_name='p_mw',
+    # Melt: one row per transformer per hour
+    df_long = df[COLS_META + hour_cols].melt(
+        id_vars=COLS_META,
+        var_name="datetime",
+        value_name="p_mw",
     )
 
-    df_long['datetime'] = pd.to_datetime(df_long['datetime'], errors='coerce').dt.strftime('%d/%m/%Y %H:%M')
+    df_long["datetime"] = pd.to_datetime(
+        df_long["datetime"], errors="coerce"
+    ).dt.strftime("%d/%m/%Y %H:%M")
 
-    print(f"  Filas post-melt     : {len(df_long):,}")
+    print(f"  Rows after melt     : {len(df_long):,}")
 
     # =========================================================
-    # 4. AGRUPAR POR BUS + DATETIME
+    # 4. GROUP BY BUS + DATETIME
     # =========================================================
-    # Aplicar fusion_map: redirigir demanda de buses fusionados al representante.
-    # Se remapea bus_name y se actualiza bus_id al del representante para que
-    # el groupby consolide correctamente la demanda.
-    name_to_id = dict(zip(buses_df['bus_name'], buses_df['bus_id']))
-    df_long['bus_name'] = df_long['bus_name'].map(lambda x: fusion_map.get(x, x))
-    df_long['bus_id']   = df_long['bus_name'].map(name_to_id)
+    # Apply fusion_map: redirect demand from fused buses to the representative.
+    # bus_name is remapped and bus_id updated to the representative bus_id
+    # so the groupby consolidates demand correctly.
+    name_to_id = dict(zip(buses_df["bus_name"], buses_df["bus_id"]))
+    df_long["bus_name"] = df_long["bus_name"].map(lambda x: fusion_map.get(x, x))
+    df_long["bus_id"] = df_long["bus_name"].map(name_to_id)
 
-    print(f"\n[4/5] Agrupando por bus_id + datetime ...")
+    print("\n[4/5] Grouping by bus_id + datetime ...")
 
     loads = (
         df_long
-        .groupby(['bus_id', 'bus_name', 'datetime'], as_index=False)['p_mw']
+        .groupby(["bus_id", "bus_name", "datetime"], as_index=False)["p_mw"]
         .sum()
     )
 
-    loads['_sort'] = pd.to_datetime(loads['datetime'], format='%d/%m/%Y %H:%M')
-    loads = loads.sort_values(['bus_id', '_sort']).drop(columns='_sort').reset_index(drop=True)
+    loads["_sort"] = pd.to_datetime(loads["datetime"], format="%d/%m/%Y %H:%M")
+    loads = (
+        loads
+        .sort_values(["bus_id", "_sort"])
+        .drop(columns="_sort")
+        .reset_index(drop=True)
+    )
 
-    print(f"  Filas output        : {len(loads):,}")
-    print(f"  Buses unicos        : {loads['bus_id'].nunique()}")
-    print(f"  Horas unicas        : {loads['datetime'].nunique()}")
-    print(f"  p_mw total promedio : {loads['p_mw'].mean():,.1f} MW")
+    print(f"  Output rows         : {len(loads):,}")
+    print(f"  Unique buses        : {loads['bus_id'].nunique()}")
+    print(f"  Unique hours        : {loads['datetime'].nunique()}")
+    print(f"  Average p_mw        : {loads['p_mw'].mean():,.1f} MW")
 
     # =========================================================
-    # 5. VERIFICAR COBERTURA
-    # Se compara contra los buses 500kV que existen en el network
-    # (excluyendo los fusionados que desaparecen del network).
+    # 5. VERIFY COVERAGE
+    # Compare against 500 kV buses present in the network
+    # (excluding fused buses that disappear from the network).
     # =========================================================
-    print(f"\n[5/5] Verificando cobertura ...")
+    print("\n[5/5] Verifying coverage ...")
 
-    buses_500_nombres = set(
-        buses_df[buses_df['baskv_kv'] == 500]['bus_name']
+    buses_500_names = set(
+        buses_df[buses_df["baskv_kv"] == 500]["bus_name"]
     ) - set(fusion_map.keys())
 
-    buses_load_nombres = set(loads['bus_name'].unique())
+    load_bus_names = set(loads["bus_name"].unique())
 
-    en_red_sin_dda = buses_500_nombres - buses_load_nombres
-    en_dda_sin_red = buses_load_nombres - buses_500_nombres
+    in_network_without_load = buses_500_names - load_bus_names
+    in_load_file_not_in_network = load_bus_names - buses_500_names
 
-    print(f"  Buses 500kV en network        : {len(buses_500_nombres)}")
-    print(f"  Buses con demanda en DDA      : {len(buses_load_nombres)}")
+    print(f"  500 kV buses in network      : {len(buses_500_names)}")
+    print(f"  Buses with load in DDA       : {len(load_bus_names)}")
 
-    if en_red_sin_dda:
-        print(f"  [AVISO] Buses en network sin demanda: {len(en_red_sin_dda)}")
-        for b in sorted(en_red_sin_dda)[:10]:
-            print(f"    {b}")
+    if in_network_without_load:
+        print(f"  [WARNING] Buses in network without load: {len(in_network_without_load)}")
+        for bus_name in sorted(in_network_without_load)[:10]:
+            print(f"    {bus_name}")
     else:
-        print(f"  Todos los buses del network tienen demanda  OK")
+        print("  All network buses have load  OK")
 
-    if en_dda_sin_red:
-        print(f"  [AVISO] Buses en DDA sin match en network: {len(en_dda_sin_red)}")
-        for b in sorted(en_dda_sin_red)[:10]:
-            print(f"    {b}")
+    if in_load_file_not_in_network:
+        print(f"  [WARNING] Buses in DDA not found in network: {len(in_load_file_not_in_network)}")
+        for bus_name in sorted(in_load_file_not_in_network)[:10]:
+            print(f"    {bus_name}")
 
     # =========================================================
-    # EXPORTAR
+    # EXPORT
     # =========================================================
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     loads.to_csv(OUTPUT_FILE, index=False)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Output: {OUTPUT_FILE}")
-    print(f"  Filas : {len(loads):,}")
+    print(f"  Rows  : {len(loads):,}")
     print(f"  Buses : {loads['bus_id'].nunique()}")
-    print("=" * 60)
+    print(f"{'=' * 60}")
+    print("Next: 16_snapshot_dc_pico2024.py")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,3 @@
-tipo,elemento,detalle
-trafo_huerfano,2580-T PEPE-1,buses ausentes: bus_i=2580
-sin_rating,B.BLANCA-T PEPE-1,ratea_mva = NaN
+type,element,detail
+orphan_transformer,2580-T PEPE-1,missing buses: bus_i=2580
+no_rating,B.BLANCA-T PEPE-1,ratea_mva = NaN

@@ -1,4 +1,4 @@
-gen_key,bus_name_origen,nombre_geosadi,nemo,bus_conexion500kv,bus_conexion500kv_name,carrier,p_nom,lat,lon,costo_marginal(USD/mwh)
+gen_key,bus_name_origen,geosadi_name,nemo,bus_conexion500kv,bus_conexion500kv_name,carrier,p_nom,lat,lon,marginal_cost
 406-1,CRIVTG26,CDRO RIVADAVIA,CRIV,461.0,SCN_500_132kV,ocgt,0.0,-45.81514536,-67.44448553,63.9
 406-2,CRIVTG26,CDRO RIVADAVIA,CRIV,461.0,SCN_500_132kV,ocgt,0.0,-45.81514536,-67.44448553,63.9
 409-1,CRIVTG21,CDRO RIVADAVIA,CRIV,461.0,SCN_500_132kV,ocgt,14.4,-45.81514536,-67.44448553,61.7

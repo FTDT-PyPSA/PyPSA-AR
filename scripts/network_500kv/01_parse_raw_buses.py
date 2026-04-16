@@ -1,57 +1,65 @@
 """
 01_parse_raw_buses.py
-Extrae buses 500 kV del .raw del SADI y exporta a CSV.
+Extracts 500 kV buses from the PSS/E .raw file and exports them to CSV.
 
-Fuente : Official data/PSSE/ver2526pid.raw
-Output : data/network_500kv/buses_500kv_raw.csv
+Source  : Official data/PSSE/ver2526pid.raw  # (external — download from GitHub Releases, place in external_data_dir/PSSE/)
+Output  : data/network_500kv/buses_500kv_raw.csv
 
-Correr desde WSL:
-    python /mnt/c/Work/pypsa-ar-base/scripts/network_500kv/01_parse_raw_buses.py
+Run from the repository root (pypsa-ar-base/):
+    python scripts/network_500kv/01_parse_raw_buses.py
 
-Formato BUS DATA en PSS/E v34:
+PSS/E v34 BUS DATA format:
     I,'NAME',BASKV,IDE,AREA,ZONE,OWNER,VM,VA,NVHI,NVLO,EVHI,EVLO
 
-    IDE=4 (aislado) se excluye -- buses desconectados del sistema, sin ramas activas.
-Campos no extraidos:
-    NVHI,NVLO,EVHI,EVLO : limites de tension -- todos 1.1/0.9 en este caso base
+    IDE=4 (isolated) is excluded — buses disconnected from the system, no active branches.
+
+Fields not extracted:
+    NVHI, NVLO, EVHI, EVLO : voltage limits — all 1.1/0.9 in this base case
 """
 
-import os, sys
+import os
+import sys
+from pathlib import Path
+import yaml
 import pandas as pd
 
 # =============================================================================
-# CONFIGURACION
+# CONFIGURATION
 # =============================================================================
 
-RAW_FILE    = "/mnt/c/Work/pypsa-ar-sandbox/Official data/PSSE/ver2526pid.raw"
-OUTPUT_DIR  = "/mnt/c/Work/pypsa-ar-base/data/network_500kv"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "buses_500kv_raw.csv")
+_cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
+REPO_DIR     = Path(_cfg["repo_dir"])
+EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
-KV_MIN = 490.0  # incluye 500 kV nominal
-KV_MAX = 530.0  # incluye 525 kV que PSS/E asigna a algunos generadores
+RAW_FILE    = EXTERNAL_DIR / "PSSE/ver2526pid.raw"
+OUTPUT_DIR  = REPO_DIR / "data/network_500kv"
+OUTPUT_FILE = OUTPUT_DIR / "buses_500kv_raw.csv"
 
-# Internacionales identificados por AREA segun nomenclatura CAMMESA (del AREA DATA del .raw)
+KV_MIN = 490.0  # includes nominal 500 kV
+KV_MAX = 530.0  # includes 525 kV assigned by PSS/E to some generators
+
+# International buses identified by AREA per CAMMESA nomenclature (from AREA DATA in .raw)
 INTERNATIONAL_AREAS = {
     18: "Paraguay",
     19: "Chile (SING)",
-    20: "Brasil",
+    20: "Brazil",
     22: "Bolivia",
     99: "Uruguay",
 }
 
-# Buses a excluir manualmente (genuinamente aislados o sin datos suficientes)
-# Agregar bus_name a este set para excluirlo del output
+# Buses to exclude manually (genuinely isolated or insufficient data)
+# Add bus_name to this set to exclude it from output
 EXCLUDE_BUSES = {
-    'R9B5RS',   # bus genuinamente aislado, sin conexiones en el raw
+    'R9B5RS',   # genuinely isolated bus, no connections in the raw
 }
 
-# True  -> excluye internacionales del CSV
-# False -> los incluye marcados con is_international=True (default)
+# True  -> excludes international buses from CSV
+# False -> includes them flagged with is_international=True (default)
 EXCLUDE_INTERNATIONAL = True
 
 
 # =============================================================================
-# FUNCIONES
+# FUNCTIONS
 # =============================================================================
 
 def find_section(lines, start_marker, end_marker):
@@ -88,7 +96,7 @@ def parse_bus_line(line):
             'va_deg':   float(parts[6]),
         }
     except Exception as e:
-        print(f"  [WARNING] linea no parseada: {line[:80]} -- {e}")
+        print(f"  [WARNING] line could not be parsed: {line[:80]} -- {e}")
         return None
 
 
@@ -101,29 +109,29 @@ IDE_DESC = {1: "PQ", 2: "PV", 3: "slack", 4: "isolated"}
 
 def main():
     print("=" * 60)
-    print("01_parse_raw_buses.py -- buses 500 kV desde PSS/E RAW")
+    print("01_parse_raw_buses.py -- 500 kV buses from PSS/E RAW")
     print("=" * 60)
 
     if not os.path.isfile(RAW_FILE):
-        print(f"[ERROR] Archivo no encontrado:\n  {RAW_FILE}"); sys.exit(1)
+        print(f"[ERROR] File not found:\n  {RAW_FILE}"); sys.exit(1)
 
     with open(RAW_FILE, 'r', encoding='ISO-8859-1') as f:
         lines = f.readlines()
 
-    print(f"Caso : {lines[2].rstrip()}")
-    print(f"Lineas en archivo: {len(lines)}")
+    print(f"Case  : {lines[2].rstrip()}")
+    print(f"Lines in file: {len(lines)}")
 
     bus_lines = find_section(lines, "BEGIN BUS DATA", "END OF BUS DATA")
     all_buses = [b for b in (parse_bus_line(l) for l in bus_lines) if b]
 
-    # Filtrar por tension y excluir IDE=4 (desconectados del sistema)
+    # Filter by voltage and exclude IDE=4 (disconnected from system)
     buses_500 = [b for b in all_buses
                  if KV_MIN <= b['baskv_kv'] <= KV_MAX and b['ide'] != 4]
 
-    print(f"\nTotal buses parseados  : {len(all_buses)}")
-    print(f"Buses 500 kV activos   : {len(buses_500)}  (IDE=4 excluidos)")
+    print(f"\nTotal buses parsed     : {len(all_buses)}")
+    print(f"Active 500 kV buses    : {len(buses_500)}  (IDE=4 excluded)")
 
-    # Marcar internacionales por area
+    # Flag international buses by area
     for b in buses_500:
         b['ide_desc'] = IDE_DESC.get(b['ide'], 'unknown')
         country = INTERNATIONAL_AREAS.get(b['area'])
@@ -131,33 +139,33 @@ def main():
         b['country']          = country or ''
 
     n_intl = sum(1 for b in buses_500 if b['is_international'])
-    print(f"Internacionales (area) : {n_intl}")
+    print(f"International (by area): {n_intl}")
 
     if EXCLUDE_INTERNATIONAL:
         buses_500 = [b for b in buses_500 if not b['is_international']]
-        print(f"-> Excluidos. Quedan: {len(buses_500)} buses")
+        print(f"-> Excluded. Remaining: {len(buses_500)} buses")
     else:
-        print("-> Incluidos con is_international=True  (EXCLUDE_INTERNATIONAL=False)")
+        print("-> Included with is_international=True  (EXCLUDE_INTERNATIONAL=False)")
 
-    # Excluir buses manuales
+    # Manually excluded buses
     if EXCLUDE_BUSES:
         before = len(buses_500)
         buses_500 = [b for b in buses_500 if b['bus_name'] not in EXCLUDE_BUSES]
         excluded = before - len(buses_500)
         if excluded:
-            print(f"\nBuses excluidos manualmente (EXCLUDE_BUSES): {excluded}")
+            print(f"\nManually excluded buses (EXCLUDE_BUSES): {excluded}")
             for name in EXCLUDE_BUSES:
                 print(f"  {name}")
 
     df = pd.DataFrame(buses_500)
 
-    print("\nPor tipo IDE:")
+    print("\nBy IDE type:")
     for ide_val, grp in df.groupby('ide'):
         print(f"  IDE={ide_val} ({IDE_DESC.get(ide_val)}): {len(grp)}")
 
     intl = df[df['is_international']]
     if not intl.empty:
-        print("\nBuses internacionales en rango 500 kV:")
+        print("\nInternational buses in 500 kV range:")
         for _, r in intl.iterrows():
             print(f"  {int(r.bus_id):6}  {r.bus_name:12}  area={int(r.area)}  {r.country}")
 
@@ -169,8 +177,8 @@ def main():
     ]
     df[col_order].sort_values('bus_id').reset_index(drop=True).to_csv(OUTPUT_FILE, index=False)
 
-    print(f"\n✔ {OUTPUT_FILE}  ({len(df)} filas)")
-    print("Proximo: 02_parse_raw_lines.py")
+    print(f"\n✔ {OUTPUT_FILE}  ({len(df)} rows)")
+    print("Next: 02_parse_raw_lines.py")
 
 
 if __name__ == "__main__":
