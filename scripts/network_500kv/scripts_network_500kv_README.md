@@ -16,14 +16,14 @@ Run in order from WSL using the `pypsa-earth-lock` environment.
 | `05_match_geosadi_coords.py` | Assigns coordinates and consolidates all buses | `buses_500kv_raw.csv` + `buses_sec_raw.csv` + `buses_PSSE_vs_geosadi.xlsx` | `buses_final.csv` |
 | `06_match_geosadi_geometry.py` | Assigns WKT geometry to lines | `lines_500kv_raw.csv` + `buses_final.csv` + GeoSADI | `lines_500kv_final.csv` |
 | `07_validate_topology.py` | Validates network topology | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `topology_report.csv` |
-| `07b_export_qgis.py` | Exports network to GeoPackage for QGIS | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `red_500kv_qgis.gpkg` |
+| `07b_export_qgis.py` | Exports network to GeoPackage for QGIS | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `network_500kv_qgis.gpkg` |
 | `08_build_network.py` | Builds the PyPSA Network object | `buses_final.csv` + `lines_500kv_final.csv` + `trafos_500kv_raw.csv` | `network_500kv.nc` |
 | `09_map_generators.py` | Maps PSS/E generators → model buses via BFS | `ver2526pid.raw` + `buses_final.csv` | `generators_mapped.csv` |
 | `10_map_loads.py` | Maps PSS/E loads → model buses via BFS | `ver2526pid.raw` + `buses_final.csv` | `loads_mapped.csv` |
 | `10b_visualize_qgis.py` | Exports generation/load balance per bus to GeoPackage | `generators_mapped.csv` + `loads_mapped.csv` + `buses_final.csv` | `balance_gen_carga.gpkg` |
 | `11_add_geo_to_generators.py` | Assigns GeoSADI coordinates to generators | `generators_mapped.csv` + `buses_final.csv` + GeoSADI | `generators_readypypsa.csv` + `generators_pendingmanualpypsa.csv` |
 | `12_build_generators_final.py` | Automatic + manual join → definitive generator table for PyPSA | `generators_readypypsa.csv` + `generators_manualpypsa.csv` | `generators_final.csv` |
-| `12b_export_qgis_generators.py` | Adds power plant layer to the balance GeoPackage | `generators_final.csv` + `balance_gen_carga.gpkg` | `centrales_electricas` layer in `balance_gen_carga.gpkg` |
+| `12b_export_qgis_generators.py` | Adds power plants layer to the network GeoPackage | `generators_final.csv` + `network_500kv_qgis.gpkg` | Layer `power_plants` in `network_500kv_qgis.gpkg` |
 | `13_clean_valores_2024.py` | Cleaning and normalization of VALORES_2024.csv | `VALORES_2024.csv` (external) | `valores_2024_clean.csv` (external) |
 | `14_detect_generator_conflicts.py` | Detects mismatches between PSS/E unit names and CAMMESA codes | `generators_final.csv` + `valores_2024_clean.csv` (external) | `conflicts_psse_cammesa.csv` |
 | `14b_build_generators_2024.py` | Builds generator table with real 2024 capacity from CAMMESA | `generators_final.csv` + `conflicts_psse_cammesa.csv` + `valores_2024_clean.csv` (external) | `generators_2024.csv` |
@@ -33,6 +33,7 @@ Run in order from WSL using the `pypsa-earth-lock` environment.
 | `18_diagnose_marginal_costs.py` | Diagnoses marginal cost coverage per generator unit | `generators_2024.csv` + `CVP_Termica.csv` (external) + `CVP_renovar.csv` (external) | `marginal_costs_diagnostic.csv` |
 | `18b_build_marginal_costs_2024.py` | Builds final annual marginal cost table per generator unit | `generators_2024.csv` + `marginal_costs_diagnostic_completed.csv` + `CVP_Termica.csv` (external) + `CVP_renovar.csv` (external) | `marginal_costs_2024.csv` |
 | `19_run_optimization.py` | Linear DC economic dispatch (OPF) over the 500 kV network | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `marginal_costs_2024.csv` + `gen_profiles_2024.csv` (external) | `results_2024_YYYYMMDD_YYYYMMDD.nc` |
+| `20_network_clustering.py` | Spatial k-means clustering of the network for long-term analysis | `network_500kv.nc` + `generators_2024.csv` + `loads_2024.csv` + `marginal_costs_2024.csv` + `gen_profiles_2024.csv` (external) | `clusters.gpkg` + `cluster_summary_k{N}.csv` + `cluster_k{N}.nc` |
 | `aliases_500kv.py` | Alias dictionary for GeoSADI matching | — | (helper module) |
 
 ---
@@ -394,6 +395,27 @@ without modifying that base file. Results are saved to a separate `.nc` file.
 
 Output: `results_2024_YYYYMMDD_YYYYMMDD.nc` in `networks/` (not versioned in git).
 The date suffix prevents overwriting results from different periods.
+
+---
+
+### `20_network_clustering.py`
+Generates simplified versions of the network via PyPSA's native k-means spatial
+clustering (`kmeans_clustering`). For each aggregation level in `CLUSTER_SIZES`
+it produces a functional clustered network ready for optimization and visualization files.
+
+The base network is loaded with generators, full hourly profiles, demand and costs
+before clustering, so each resulting clustered network is ready for `n.optimize()`
+without additional steps.
+
+**Configurable parameters:**
+- `CLUSTER_SIZES` — list of desired aggregation levels (e.g. [10, 20, 30])
+- `BUS_WEIGHTING` — weighting criterion: `"uniform"` (pure geographic), `"p_nom"` (weighted by installed capacity), `"demand"` (weighted by demand)
+- `EXCLUDE_NO_COST` — False (cost=0) or True (exclude from model)
+
+**Outputs** in `data/network_500kv/clusters/`:
+- `clusters.gpkg` — layers `k{N}_buses`, `k{N}_centroids`, `k{N}_lines` for each N
+- `cluster_summary_k{N}.csv` — installed capacity by technology by cluster
+- `cluster_k{N}.nc` — exported clustered network (not versioned in git)
 
 ---
 
