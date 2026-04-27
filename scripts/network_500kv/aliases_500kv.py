@@ -16,7 +16,7 @@ Reason for the "identity" aliases (value == key):
     The identity alias allows an N-word window to capture them as a unit.
 
 Maintenance:
-    Add new entries whenever new no_match cases appear while running script 04.
+    Add new entries whenever new no_match cases appear while running script 06.
     The report shows the [BUS_I] — [BUS_J] tokens to guide the diagnosis.
 """
 

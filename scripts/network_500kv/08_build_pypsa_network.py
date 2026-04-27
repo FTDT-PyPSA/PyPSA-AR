@@ -7,14 +7,17 @@ Inputs:
     data/network_500kv/lines_500kv_final.csv  (script 06 — lines with geometry)
     data/network_500kv/trafos_500kv_raw.csv   (script 03 — transformers)
 
-Output:
+Outputs:
     networks/network_500kv.nc
+    data/network_500kv/fusion_map.csv   (child_bus_name -> root_bus_name mapping
+                                         for primary buses merged via bus section
+                                         couplers; empty file if no merges occur)
 
 Run from the repository root (pypsa-ar-base/):
     python scripts/network_500kv/08_build_pypsa_network.py
 
 Modeling decisions:
-    - Bus section couplers (series_compensator with r=0) merged in memory before building
+    - Bus section couplers (series_compensator with r=0) merged in memory before building.
     - Impedances from PSS/E in pu (Sbase=100 MVA), converted to physical units per line:
         Z_base = baskv_kv(bus_i)² / S_base
     - s_nom from ratea_mva (MVA); NaN -> s_nom=0 (no limit)
@@ -48,10 +51,11 @@ REPO_DIR = Path(_cfg["repo_dir"])
 DATA_DIR   = REPO_DIR / "data/network_500kv"
 OUTPUT_DIR = REPO_DIR / "networks"
 
-BUSES_FILE  = DATA_DIR / "buses_final.csv"
-LINES_FILE  = DATA_DIR / "lines_500kv_final.csv"
-TRAFOS_FILE = DATA_DIR / "trafos_500kv_raw.csv"
-OUTPUT_FILE = OUTPUT_DIR / "network_500kv.nc"
+BUSES_FILE       = DATA_DIR / "buses_final.csv"
+LINES_FILE       = DATA_DIR / "lines_500kv_final.csv"
+TRAFOS_FILE      = DATA_DIR / "trafos_500kv_raw.csv"
+OUTPUT_FILE      = OUTPUT_DIR / "network_500kv.nc"
+FUSION_MAP_FILE  = DATA_DIR / "fusion_map.csv"
 
 # PSS/E system base — confirmed in .raw header (line 2, SBASE field)
 S_BASE_MVA = 100.0
@@ -195,16 +199,36 @@ def main():
             x = parent.get(x, x)
         return x
 
+    def is_clean_name(name):
+        """True if bus name has no '.' or '-' characters."""
+        return "." not in name and "-" not in name
+
+    def pick_root(a, b):
+        """Returns the preferred root among two bus_id strings.
+        Primary criterion : prefer the bus whose name has no '.' or '-'.
+        Secondary (tiebreak): lower bus_id wins (matches original behavior)."""
+        name_a = id_to_name.get(int(a), "")
+        name_b = id_to_name.get(int(b), "")
+        clean_a = is_clean_name(name_a)
+        clean_b = is_clean_name(name_b)
+        if clean_a and not clean_b:
+            return a
+        if clean_b and not clean_a:
+            return b
+        try:
+            return a if int(a) <= int(b) else b
+        except (ValueError, TypeError):
+            return a
+
     def union(a, b):
         ra, rb = find(a), find(b)
         if ra == rb:
             return
-        try:
-            if int(ra) > int(rb):
-                ra, rb = rb, ra
-        except (ValueError, TypeError):
-            pass
-        parent[rb] = ra
+        root = pick_root(ra, rb)
+        if root == ra:
+            parent[rb] = ra
+        else:
+            parent[ra] = rb
 
     for _, row in couplers.iterrows():
         union(str(row['bus_i']), str(row['bus_j']))
@@ -223,6 +247,19 @@ def main():
     print(f"    Merged buses      : {len(fusion_map)}")
     for child, root in sorted(fusion_map.items()):
         print(f"      {child:<20} -> {root}")
+
+    # Persist fusion_map for downstream scripts that need to resolve
+    # pre-merge bus names (e.g. 20A_simplify_network.py reading parent_bus_id
+    # from buses_final.csv, which still references merged primaries).
+    if fusion_map:
+        fusion_df = pd.DataFrame(
+            sorted(fusion_map.items()),
+            columns=["child_bus_name", "root_bus_name"],
+        )
+    else:
+        fusion_df = pd.DataFrame(columns=["child_bus_name", "root_bus_name"])
+    fusion_df.to_csv(FUSION_MAP_FILE, index=False)
+    print(f"    fusion_map saved  : {FUSION_MAP_FILE}")
 
     for child_name in fusion_map:
         if child_name in n.buses.index:
