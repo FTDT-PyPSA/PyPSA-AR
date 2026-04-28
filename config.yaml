@@ -1,26 +1,36 @@
 # =============================================================================
-# config.yaml — PyPSA Argentina 500 kV Model
+# config.yaml — PyPSA Argentina
 # =============================================================================
 #
 # PURPOSE:
 #   This is the only file you need to edit before running any script.
-#   All paths in the pipeline are derived from the two variables below.
+#   All paths in both pipelines (network_500kv and network_pypsa_ar) are
+#   derived from the two variables below.
 #
 # SETUP INSTRUCTIONS:
 #   1. Clone the repository to your local machine.
 #   2. Edit repo_dir to point to the root of the cloned repository.
-#   3. Download the external data files from the GitHub Releases page:
-
-	MODEL - 500kV
+#   3. Download the external data files from the GitHub Releases page.
+#
+#      For the 500 kV model (v1.0):
 #          https://github.com/FTDT-PyPSA/PyPSA-AR/releases/tag/v1.0-data
-#      Extract them, maintaining the folder structure from the release notes.
+#
+#      For the full PYPSA_AR model (v2.0):
+#          https://github.com/FTDT-PyPSA/PyPSA-AR/releases/tag/v2.0-data
+#
+#      Extract them maintaining the folder structure from the release notes.
 #   4. Edit external_data_dir to point to the folder where you extracted them.
 #   5. Run scripts from the repository root using:
 #          python scripts/network_500kv/01_parse_raw_buses.py
+#          python scripts/network_pypsa_ar/01_parse_raw_buses.py
 #      Or use the Makefile (see README.md).
 #
 # NOTES:
 #   - Use forward slashes in paths, even on Windows (WSL handles this correctly).
+#   - Both models share the same external_data_dir (same PSS/E and GeoSADI sources).
+#   - Model outputs are written to separate subfolders within repo_dir:
+#       data/network_500kv/     — 500 kV model (v1.0)
+#       data/network_pypsa_ar/  — full PYPSA_AR model (v2.0, 132–500 kV)
 #
 # =============================================================================
 

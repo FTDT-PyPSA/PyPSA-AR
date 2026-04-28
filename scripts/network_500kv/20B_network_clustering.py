@@ -30,16 +30,13 @@ Outputs — all in data/network_500kv/clusters/:
 Logic:
     1. Load network_500kv_simplified.nc. Data for 2024 (generators, profiles,
        demand, marginal costs) is already attached by script 20A.
-    2. Remove isolated buses listed in BUSES_TO_REMOVE (topological islands
-       that have no operational meaning in the OPF — see script 19).
+    2. Remove buses listed in BUSES_TO_REMOVE: topological islands (T PEPE,
+       PBUENA2) and the inactive Brazil interconnection (BRASIL, GARABI).
     3. For each N in CLUSTER_SIZES:
        a. Compute per-bus weights according to BUS_WEIGHTING mode.
        b. Build a metric-projected copy of the network (EPSG:5347, POSGAR 2007
           / Argentina 3) so k-means distances are geographically correct.
-       c. Run busmap_by_kmeans with N-1 clusters on the subset of Argentine
-          buses (BRAZIL excluded). BRAZIL is forced to its own single-bus
-          cluster in the busmap, preserving the import link as an
-          inter-cluster connection.
+       c. Run busmap_by_kmeans with N clusters on all remaining (Argentine) buses.
        d. Apply the full busmap to the original network (EPSG:4326 coords)
           via get_clustering_from_busmap. Centroids are produced in WGS84
           for direct use in GeoPackage / QGIS.
@@ -48,15 +45,14 @@ Logic:
 Modeling decisions:
     - Isolated buses (T PEPE, PBUENA2) are removed. They are topological
       islands in the current PSS/E model (script 19 also excludes them from
-      the OPF). If the underlying data is fixed later, re-running this
-      script will naturally re-include them.
-    - BRAZIL virtual bus is excluded from k-means but preserved as a
-      single-bus cluster. The import_brasil Link is automatically remapped
-      by PyPSA to connect (cluster holding GARABI) <-> BRAZIL. This keeps
-      link parameters (p_nom=2200 MW, marginal_cost=110 USD/MWh) intact
-      across scenarios without manual reinjection.
-    - Number of final clusters = N. Of those, N-1 are Argentine clusters
-      and 1 is the BRAZIL singleton.
+      the OPF).
+    - The Argentina-Brazil interconnection is dropped at this stage. The
+      base .nc carries a BRASIL virtual bus and the importacion_brasil link,
+      but no generator on the Brazilian side, so the model cannot actually
+      use the import. Keeping the node would only add noise to the
+      clustering. Future scenarios that want to model imports can add a
+      virtual generator in the cluster that previously hosted GARABI.
+    - Number of final clusters = N. All clusters are Argentine.
     - K-means distance is computed on metric coordinates (EPSG:5347). The
       output .nc and GeoPackage use WGS84 (EPSG:4326) — standard for the project.
     - Slack bus and virtual load shedding are NOT added here. They are
@@ -105,20 +101,28 @@ from pypsa.clustering.spatial import busmap_by_kmeans, get_clustering_from_busma
 # CONFIGURATION — edit as needed for each run
 # =============================================================================
 
-# Desired aggregation levels. Total clusters per run = N (N-1 argentine + BRAZIL).
+# Desired aggregation levels. Total clusters per run = N (all Argentine).
 CLUSTER_SIZES = [10, 20, 30]
 
 # Weighting criterion. Options: "uniform" | "p_nom" | "demand"
 #                              | "activity_sum" | "activity_max"
 BUS_WEIGHTING = "activity_sum"
 
-# Isolated buses that are topological islands in the current PSS/E model and
-# have no operational meaning. They are dropped before clustering.
-BUSES_TO_REMOVE = {"T PEPE", "PBUENA2"}
-
-# Bus preserved as its own single-bus cluster (excluded from k-means but kept
-# in the output network).
-BRAZIL_BUS = "BRASIL"
+# Isolated buses and non-functional foreign nodes that should not enter the
+# clustering. They are dropped before k-means so the K clusters are entirely
+# Argentine and the resulting network represents the SADI cleanly.
+#
+# - T PEPE, PBUENA2 : topological islands in the current PSS/E model with no
+#   operational meaning (script 19 also excludes them from the OPF).
+# - BRASIL          : virtual node for the Argentina-Brazil interconnection.
+#   Dropped because the link importacion_brasil is not connected to any
+#   generator on the Brazilian side, so the model cannot actually import
+#   from Brazil. Keeping the node would only add noise to the clustering.
+#   Future scenarios that want to model imports can add a virtual generator
+#   in the cluster that previously hosted GARABI (see project notes).
+# - GARABI          : intermediate bus that only exists to host the link to
+#   BRASIL. With BRASIL removed it has no purpose.
+BUSES_TO_REMOVE = {"T PEPE", "PBUENA2", "BRASIL", "GARABI"}
 
 _cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
 REPO_DIR = Path(_cfg["repo_dir"])
@@ -166,8 +170,10 @@ def drop_custom_columns(n):
 
 
 def remove_isolated_buses(n):
-    """Removes buses listed in BUSES_TO_REMOVE and everything attached to them."""
-    print("\n[2/4] Removing isolated buses ...")
+    """Removes buses listed in BUSES_TO_REMOVE and everything attached to them.
+    Includes both topological islands and the Argentina-Brazil interconnection
+    (which is non-functional in the current model — see module docstring)."""
+    print("\n[2/4] Removing non-operational buses ...")
     to_remove = [b for b in BUSES_TO_REMOVE if b in n.buses.index]
 
     if not to_remove:
@@ -254,14 +260,15 @@ def compute_bus_weights(n, mode):
     return w
 
 
-def project_network_to_metric(n):
-    """Returns a deep copy of n with bus x, y replaced by EPSG:5347 metric coords.
-    Used only for distance computation in k-means; not for output."""
-    n_m = n.copy()
+def project_coords_to_metric(n):
+    """Converts bus x, y in-place from WGS84 to EPSG:5347 (metric).
+    Returns the original coords as a DataFrame so the caller can restore them.
+    Avoids n.copy() because it is unreliable for networks with many snapshots."""
+    original = n.buses[["x", "y"]].copy()
 
-    coords = n_m.buses[["x", "y"]].dropna()
+    coords = n.buses[["x", "y"]].dropna()
     if coords.empty:
-        return n_m
+        return original
 
     gdf = gpd.GeoDataFrame(
         coords,
@@ -269,9 +276,15 @@ def project_network_to_metric(n):
         crs=CRS_SOURCE,
     ).to_crs(CRS_METRIC)
 
-    n_m.buses.loc[gdf.index, "x"] = gdf.geometry.x.values
-    n_m.buses.loc[gdf.index, "y"] = gdf.geometry.y.values
-    return n_m
+    n.buses.loc[gdf.index, "x"] = gdf.geometry.x.values
+    n.buses.loc[gdf.index, "y"] = gdf.geometry.y.values
+    return original
+
+
+def restore_coords(n, original):
+    """Restores bus x, y from a backup DataFrame."""
+    n.buses.loc[original.index, "x"] = original["x"].values
+    n.buses.loc[original.index, "y"] = original["y"].values
 
 
 def group_carrier(carrier):
@@ -300,11 +313,6 @@ def load_network():
     print(f"  Lines       : {len(n.lines)}")
     print(f"  Links       : {len(n.links)}")
 
-    if BRAZIL_BUS in n.buses.index:
-        print(f"  BRAZIL bus present (will be preserved as standalone cluster)")
-    else:
-        print(f"  [WARN] BRAZIL bus not found in network")
-
     return n
 
 
@@ -329,36 +337,34 @@ def run_clustering(n):
     weights = compute_bus_weights(n, BUS_WEIGHTING)
     print(f"  Bus weights computed  : {len(weights)} buses")
 
-    # Metric projection (used for distances in k-means only)
-    n_metric = project_network_to_metric(n)
-
-    # Buses that actually enter the k-means (Argentine buses — everything except BRAZIL)
-    argentine_idx = n.buses.index.difference([BRAZIL_BUS])
+    # Save original WGS84 coords. We will project in-place to metric for k-means
+    # and restore WGS84 before get_clustering_from_busmap (which we want to run
+    # on the WGS84 network so centroids end up in lat/lon directly).
+    original_coords = n.buses[["x", "y"]].copy()
 
     results = {}
     for N in CLUSTER_SIZES:
         print(f"\n  --- K = {N} ---")
-        n_kmeans_clusters = N - 1 if BRAZIL_BUS in n.buses.index else N
 
-        if n_kmeans_clusters < 1:
-            print(f"    [SKIP] N={N} is too small (<2 when BRAZIL is present)")
+        if N < 1:
+            print(f"    [SKIP] N={N} is too small")
             continue
 
-        # Run k-means on Argentine subset with metric coords
-        busmap_ar = busmap_by_kmeans(
-            n_metric,
-            bus_weightings=weights.loc[argentine_idx],
-            n_clusters=n_kmeans_clusters,
-            buses_i=argentine_idx,
-        )
+        # --- Phase 1: k-means on metric coords ---
+        project_coords_to_metric(n)
+        try:
+            busmap = busmap_by_kmeans(
+                n,
+                bus_weightings=weights,
+                n_clusters=N,
+                buses_i=n.buses.index,
+            )
+        finally:
+            # Always restore WGS84, even if k-means crashed
+            restore_coords(n, original_coords)
 
-        # Ensure cluster IDs are stringy and non-colliding with BRAZIL label
-        busmap_ar = busmap_ar.astype(str).apply(lambda s: f"cluster_{s}")
-
-        # Build full busmap: BRAZIL -> its own singleton cluster
-        busmap = busmap_ar.copy()
-        if BRAZIL_BUS in n.buses.index:
-            busmap[BRAZIL_BUS] = BRAZIL_BUS
+        # Ensure cluster IDs are stringy
+        busmap = busmap.astype(str).apply(lambda s: f"cluster_{s}")
 
         # Sanity: every bus must be in the busmap
         missing_in_busmap = set(n.buses.index) - set(busmap.index)
@@ -366,10 +372,25 @@ def run_clustering(n):
             print(f"    [ERROR] Buses missing from busmap: {sorted(missing_in_busmap)[:5]}")
             sys.exit(1)
 
-        # Apply busmap to the ORIGINAL network (WGS84 coords) so centroids
-        # are produced in lat/lon directly.
+        # --- Phase 2: apply busmap on WGS84 network ---
         clustering = get_clustering_from_busmap(n, busmap)
         nc = clustering.network
+
+        # Guard: clustering should preserve snapshots; if it doesn't, restore them
+        # manually. Some PyPSA versions lose time index for empty per-Load data.
+        if len(nc.snapshots) != len(n.snapshots):
+            print(f"    [INFO] Clustered network lost snapshots "
+                  f"({len(nc.snapshots)} vs {len(n.snapshots)}); restoring from base.")
+            nc.set_snapshots(n.snapshots)
+
+        # Validation: did time series actually survive?
+        orig_shape = n.loads_t.p_set.shape
+        clus_shape = nc.loads_t.p_set.shape
+        if clus_shape[0] != orig_shape[0]:
+            print(f"    [WARN] loads_t.p_set lost time dimension: "
+                  f"{orig_shape} -> {clus_shape}")
+            print(f"           Rebuilding from original via busmap ...")
+            nc = rebuild_time_series(n, nc, busmap)
 
         # Export clustered network
         nc_path = OUTPUT_DIR / f"cluster_k{N}.nc"
@@ -378,11 +399,53 @@ def run_clustering(n):
         print(f"    Super-buses generated : {len(nc.buses)}")
         print(f"    Equivalent lines      : {len(nc.lines)}")
         print(f"    Equivalent links      : {len(nc.links)}")
+        print(f"    Snapshots             : {len(nc.snapshots)}")
+        print(f"    loads_t.p_set shape   : {nc.loads_t.p_set.shape}")
         print(f"    Saved                 : {nc_path.name}")
 
         results[N] = {"nc": nc, "busmap": busmap}
 
     return results
+
+
+def rebuild_time_series(n_orig, nc, busmap):
+    """Rebuilds nc.loads_t.p_set and nc.generators_t.p_max_pu by aggregating
+    the original network's time series through the busmap. Used as a fallback
+    when get_clustering_from_busmap drops the time dimension in PyPSA versions
+    that don't preserve it correctly."""
+
+    # --- Loads: sum original load series per destination cluster ---
+    # In the ORIGINAL network, each Load sits on a bus. The busmap tells us
+    # which cluster that bus belongs to.
+    if not n_orig.loads_t.p_set.empty and len(n_orig.loads) > 0:
+        load_bus_orig = n_orig.loads["bus"]                   # Load -> bus
+        load_cluster  = load_bus_orig.map(busmap)             # Load -> cluster
+        # Aggregate: sum all original load series that map to the same cluster
+        new_load_ts = (
+            n_orig.loads_t.p_set
+            .T.groupby(load_cluster).sum().T
+        )
+        # get_clustering_from_busmap creates one Load per cluster, usually named
+        # by the cluster id. We rename columns to match what nc.loads has.
+        # Map: cluster_id -> Load name in nc
+        cluster_to_load_nc = {b: f"{b}" for b in nc.buses.index}
+        # nc.loads may already name them differently; match by 'bus' field.
+        if len(nc.loads) > 0:
+            nc_load_by_bus = {row["bus"]: idx for idx, row in nc.loads.iterrows()}
+            rename = {cl: nc_load_by_bus[cl] for cl in new_load_ts.columns
+                      if cl in nc_load_by_bus}
+            new_load_ts = new_load_ts.rename(columns=rename)
+        nc.loads_t.p_set = new_load_ts
+
+    # --- Generator availability profiles: preserve per-generator (no aggregation) ---
+    # Generators are not merged — only their bus attribute changes. So the
+    # original p_max_pu matrix is valid as-is, just needs to be reattached.
+    if not n_orig.generators_t.p_max_pu.empty:
+        valid_cols = [c for c in n_orig.generators_t.p_max_pu.columns
+                      if c in nc.generators.index]
+        nc.generators_t.p_max_pu = n_orig.generators_t.p_max_pu[valid_cols]
+
+    return nc
 
 
 # =============================================================================
@@ -543,7 +606,6 @@ def main():
     print(f"\nAggregation levels : {CLUSTER_SIZES}")
     print(f"Weighting mode     : {BUS_WEIGHTING}")
     print(f"Buses to remove    : {sorted(BUSES_TO_REMOVE)}")
-    print(f"Preserved singleton: {BRAZIL_BUS}")
 
     print("\n[0/4] Verifying inputs ...")
     verify_inputs()

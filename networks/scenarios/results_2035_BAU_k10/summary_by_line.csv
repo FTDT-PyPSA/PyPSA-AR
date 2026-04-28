@@ -1,0 +1,13 @@
+line_id,from_region,to_region,from_cluster_id,to_cluster_id,length_km,capacity_initial_MW,capacity_final_MW,capacity_added_MW,gross_flow_GWh,net_flow_GWh,mean_loading_%,hours_above_80%,hours_above_90%,hours_above_99%
+5,Comahue,SurBuenosAires,cluster_1,cluster_7,598.8,6311.1,6311.1,0.0,20033.5,19443.5,36.14,290.0,20.0,10.0
+10,Chaco-Formosa-NSantaFe,Corrientes-Misiones,cluster_3,cluster_9,249.7,3464.0,3464.0,0.0,13116.1,-13116.1,43.11,36.0,0.0,0.0
+6,AMBA,SurBuenosAires,cluster_2,cluster_7,424.0,9773.1,9773.1,0.0,11860.7,-9351.5,13.82,0.0,0.0,0.0
+11,Litoral,Corrientes-Misiones,cluster_8,cluster_9,535.1,3464.0,3464.0,0.0,7276.2,-7116.9,23.91,0.0,0.0,0.0
+8,Chaco-Formosa-NSantaFe,NOA,cluster_3,cluster_4,560.2,1732.0,1732.0,0.0,6000.9,5748.4,39.44,101.0,36.0,36.0
+7,AMBA,Litoral,cluster_2,cluster_8,319.7,4763.0,4763.0,0.0,5256.9,-3240.4,12.56,0.0,0.0,0.0
+3,Comahue,Patagonia,cluster_1,cluster_5,924.4,1264.0,1264.0,0.0,4258.6,4258.6,38.36,15.0,0.0,0.0
+0,Cordoba-SanLuis,NOA,cluster_0,cluster_4,564.9,1083.0,1083.0,0.0,3747.0,3122.4,39.39,555.0,216.0,60.0
+4,Comahue,Cuyo,cluster_1,cluster_6,694.8,1732.0,1732.0,0.0,3688.6,3374.4,24.25,0.0,0.0,0.0
+9,Chaco-Formosa-NSantaFe,Litoral,cluster_3,cluster_8,527.6,1083.0,1083.0,0.0,3406.4,2823.4,35.81,587.0,238.0,58.0
+2,Cordoba-SanLuis,Litoral,cluster_0,cluster_8,469.1,1385.6,1385.6,0.0,3176.0,780.1,26.09,36.0,0.0,0.0
+1,Cordoba-SanLuis,Cuyo,cluster_0,cluster_6,400.5,866.0,866.0,0.0,2485.1,1409.4,32.67,556.0,311.0,119.0

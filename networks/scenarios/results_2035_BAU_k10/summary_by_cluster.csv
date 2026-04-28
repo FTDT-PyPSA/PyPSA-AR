@@ -1,0 +1,11 @@
+region_name,cluster_id,demand_GWh,generation_GWh,net_export_GWh,net_export_%_of_demand,renewable_generation_GWh,renewable_share_in_region_%
+AMBA,cluster_2,64452.9,51861.0,-12591.9,-19.5,29254.8,56.41
+Litoral,cluster_8,30182.6,22702.5,-7480.1,-24.8,7856.4,34.61
+Cordoba-SanLuis,cluster_0,17253.3,22565.3,5312.0,30.8,17642.6,78.18
+SurBuenosAires,cluster_7,16900.3,6808.3,-10092.0,-59.7,2186.4,32.11
+NOA,cluster_4,16089.7,7218.8,-8870.8,-55.1,5900.5,81.74
+Cuyo,cluster_6,11850.4,7066.7,-4783.8,-40.4,5565.6,78.76
+Chaco-Formosa-NSantaFe,cluster_3,8841.2,4297.0,-4544.2,-51.4,4297.0,100.0
+Patagonia,cluster_5,8766.4,4507.8,-4258.6,-48.6,4360.7,96.74
+Corrientes-Misiones,cluster_9,7221.2,27454.2,20233.0,280.2,27454.2,100.0
+Comahue,cluster_1,6113.9,33190.4,27076.5,442.9,23248.5,70.05

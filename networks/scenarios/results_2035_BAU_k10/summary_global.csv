@@ -1,0 +1,2 @@
+scenario,cluster_level_k,solver,solver_status,solve_time_seconds,year_factor,total_demand_TWh,total_generation_TWh,load_shedding_GWh,load_shedding_%_of_demand,renewable_generation_TWh,renewable_share_%,total_annual_cost_USD,total_annual_cost_billion_USD
+2035_BAU,10,highs,ok,13.1,1.0027,187.672,187.672,0.0,0.0,127.767,68.08,4692823706.0,4.693

@@ -1,0 +1,63 @@
+type,name,carrier,region,cluster_id,new_capacity_MW
+generator,new_ccgt_cluster_0,ccgt,Cordoba-SanLuis,cluster_0,-0.0
+generator,new_ccgt_cluster_1,ccgt,Comahue,cluster_1,-0.0
+generator,new_ccgt_cluster_2,ccgt,AMBA,cluster_2,-0.0
+generator,new_ccgt_cluster_3,ccgt,Chaco-Formosa-NSantaFe,cluster_3,-0.0
+generator,new_ccgt_cluster_4,ccgt,NOA,cluster_4,-0.0
+generator,new_ccgt_cluster_5,ccgt,Patagonia,cluster_5,-0.0
+generator,new_ccgt_cluster_6,ccgt,Cuyo,cluster_6,-0.0
+generator,new_ccgt_cluster_7,ccgt,SurBuenosAires,cluster_7,-0.0
+generator,new_ccgt_cluster_8,ccgt,Litoral,cluster_8,-0.0
+generator,new_ccgt_cluster_9,ccgt,Corrientes-Misiones,cluster_9,-0.0
+generator,new_ocgt_cluster_0,ocgt,Cordoba-SanLuis,cluster_0,-0.0
+generator,new_ocgt_cluster_1,ocgt,Comahue,cluster_1,-0.0
+generator,new_ocgt_cluster_2,ocgt,AMBA,cluster_2,-0.0
+generator,new_ocgt_cluster_3,ocgt,Chaco-Formosa-NSantaFe,cluster_3,-0.0
+generator,new_ocgt_cluster_4,ocgt,NOA,cluster_4,-0.0
+generator,new_ocgt_cluster_5,ocgt,Patagonia,cluster_5,-0.0
+generator,new_ocgt_cluster_6,ocgt,Cuyo,cluster_6,-0.0
+generator,new_ocgt_cluster_7,ocgt,SurBuenosAires,cluster_7,-0.0
+generator,new_ocgt_cluster_8,ocgt,Litoral,cluster_8,-0.0
+generator,new_ocgt_cluster_9,ocgt,Corrientes-Misiones,cluster_9,-0.0
+generator,new_diesel_cluster_0,diesel,Cordoba-SanLuis,cluster_0,-0.0
+generator,new_diesel_cluster_1,diesel,Comahue,cluster_1,-0.0
+generator,new_diesel_cluster_2,diesel,AMBA,cluster_2,-0.0
+generator,new_diesel_cluster_3,diesel,Chaco-Formosa-NSantaFe,cluster_3,-0.0
+generator,new_diesel_cluster_4,diesel,NOA,cluster_4,-0.0
+generator,new_diesel_cluster_5,diesel,Patagonia,cluster_5,-0.0
+generator,new_diesel_cluster_6,diesel,Cuyo,cluster_6,-0.0
+generator,new_diesel_cluster_7,diesel,SurBuenosAires,cluster_7,-0.0
+generator,new_diesel_cluster_8,diesel,Litoral,cluster_8,-0.0
+generator,new_diesel_cluster_9,diesel,Corrientes-Misiones,cluster_9,-0.0
+generator,new_solar_cluster_0,solar,Cordoba-SanLuis,cluster_0,-0.0
+generator,new_solar_cluster_1,solar,Comahue,cluster_1,3916.06
+generator,new_solar_cluster_2,solar,AMBA,cluster_2,-0.0
+generator,new_solar_cluster_3,solar,Chaco-Formosa-NSantaFe,cluster_3,-0.0
+generator,new_solar_cluster_4,solar,NOA,cluster_4,2571.48
+generator,new_solar_cluster_5,solar,Patagonia,cluster_5,-0.0
+generator,new_solar_cluster_6,solar,Cuyo,cluster_6,-0.0
+generator,new_solar_cluster_7,solar,SurBuenosAires,cluster_7,-0.0
+generator,new_solar_cluster_8,solar,Litoral,cluster_8,2235.84
+generator,new_solar_cluster_9,solar,Corrientes-Misiones,cluster_9,-0.0
+generator,new_wind_cluster_0,wind,Cordoba-SanLuis,cluster_0,4149.56
+generator,new_wind_cluster_1,wind,Comahue,cluster_1,-0.0
+generator,new_wind_cluster_2,wind,AMBA,cluster_2,7418.46
+generator,new_wind_cluster_3,wind,Chaco-Formosa-NSantaFe,cluster_3,1077.73
+generator,new_wind_cluster_4,wind,NOA,cluster_4,43.91
+generator,new_wind_cluster_5,wind,Patagonia,cluster_5,-0.0
+generator,new_wind_cluster_6,wind,Cuyo,cluster_6,411.04
+generator,new_wind_cluster_7,wind,SurBuenosAires,cluster_7,-0.0
+generator,new_wind_cluster_8,wind,Litoral,cluster_8,-0.0
+generator,new_wind_cluster_9,wind,Corrientes-Misiones,cluster_9,4152.28
+line,line_0,transmission,Cordoba-SanLuis <-> NOA,cluster_0 <-> cluster_4,0.0
+line,line_1,transmission,Cordoba-SanLuis <-> Cuyo,cluster_0 <-> cluster_6,0.0
+line,line_10,transmission,Chaco-Formosa-NSantaFe <-> Corrientes-Misiones,cluster_3 <-> cluster_9,0.0
+line,line_11,transmission,Litoral <-> Corrientes-Misiones,cluster_8 <-> cluster_9,0.0
+line,line_2,transmission,Cordoba-SanLuis <-> Litoral,cluster_0 <-> cluster_8,0.0
+line,line_3,transmission,Comahue <-> Patagonia,cluster_1 <-> cluster_5,0.0
+line,line_4,transmission,Comahue <-> Cuyo,cluster_1 <-> cluster_6,0.0
+line,line_5,transmission,Comahue <-> SurBuenosAires,cluster_1 <-> cluster_7,0.0
+line,line_6,transmission,AMBA <-> SurBuenosAires,cluster_2 <-> cluster_7,0.0
+line,line_7,transmission,AMBA <-> Litoral,cluster_2 <-> cluster_8,0.0
+line,line_8,transmission,Chaco-Formosa-NSantaFe <-> NOA,cluster_3 <-> cluster_4,0.0
+line,line_9,transmission,Chaco-Formosa-NSantaFe <-> Litoral,cluster_3 <-> cluster_8,0.0

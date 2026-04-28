@@ -5,10 +5,11 @@ old/
 experiments/
 config/paths.local.yaml
 __pycache__/
-data/network_500kv/spanish
 data/network_500kv/generators_pendingmanualpypsa.csv
 *.pyc
 *.nc
+data/network_pypsa_ar
+scripts/network_pypsa_ar
 
 # Excel temporary files
 ~$*.xlsx

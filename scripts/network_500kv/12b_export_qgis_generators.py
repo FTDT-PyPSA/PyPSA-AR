@@ -123,7 +123,7 @@ def main():
 
     print(f"\nLayer '{LAYER_NAME}' added to {GPKG_FILE}")
     print(f"  {len(gdf)} power plants exported")
-    print("Next: 12c_test_snapshot.py")
+    print("Next: 13_clean_valores_2024")
 
 
 if __name__ == "__main__":
