@@ -182,6 +182,11 @@ OUTPUT_FILE   = OUTPUT_DIR / f"scenario_{SCENARIO_NAME}_k{K}.nc"
 N_YEARS       = TARGET_YEAR - BASE_YEAR
 DEMAND_FACTOR = (1 + DEMAND_GROWTH_RATE) ** N_YEARS
 
+# --- Expansion limits per technology (MW per cluster) ---
+EXPANSION_LIMITS_MW = {
+    "solar": 5000 / K,   # Total cap: 5000 MW distributed across K clusters
+    "wind":  3000 / K,   # Total cap: 3000 MW distributed across K clusters
+}
 
 # =============================================================================
 # HELPERS
@@ -738,6 +743,7 @@ def add_expandable_generators(n, costs):
                 carrier           = carrier,
                 p_nom             = 0,
                 p_nom_extendable  = True,
+                p_nom_max         = EXPANSION_LIMITS_MW.get(carrier, float("inf")), 
                 capital_cost      = capital_cost,
                 marginal_cost     = marginal_cost,
             )
