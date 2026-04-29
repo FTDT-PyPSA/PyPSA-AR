@@ -59,6 +59,7 @@ Run from the repository root:
 import os
 import sys
 import math
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -173,20 +174,29 @@ HVAC_LIFETIME_YEARS       = 40
 HVAC_WACC_FALLBACK        = 0.0536   # transmission has no scenario in ATB
 
 # --- Paths ---
-INPUT_NETWORK = REPO_DIR / f"data/network_500kv/clusters/cluster_k{K}.nc"
-ATB_FILE      = EXTERNAL_DIR / "Technology_data/costs_2035_US.csv"
-OUTPUT_DIR    = REPO_DIR / "networks/scenarios"
-OUTPUT_FILE   = OUTPUT_DIR / f"scenario_{SCENARIO_NAME}_k{K}.nc"
+INPUT_NETWORK         = REPO_DIR / f"data/network_500kv/clusters/cluster_k{K}.nc"
+ATB_FILE              = EXTERNAL_DIR / "Technology_data/costs_2035_US.csv"
+FUEL_PROPERTIES_FILE  = EXTERNAL_DIR / "fuels/fuel_properties.yaml"
+CARRIER_DEFAULTS_FILE = EXTERNAL_DIR / "fuels/carrier_defaults.yaml"
+OUTPUT_DIR            = REPO_DIR / "networks/scenarios"
+OUTPUT_FILE           = OUTPUT_DIR / f"scenario_{SCENARIO_NAME}_k{K}.nc"
 
 # --- Derived ---
 N_YEARS       = TARGET_YEAR - BASE_YEAR
 DEMAND_FACTOR = (1 + DEMAND_GROWTH_RATE) ** N_YEARS
 
 # --- Expansion limits per technology (MW per cluster) ---
+# These caps prevent the optimizer from building unrealistic amounts of new
+# variable RES. The total cap is divided uniformly across K clusters so that
+# every region gets the same per-bus allowance — a simplification consistent
+# with not modeling land availability or resource quality differences.
+# To remove the cap for a carrier, drop its entry from the dict; the loop
+# in `add_expandable_generators` falls back to float("inf") when missing.
 EXPANSION_LIMITS_MW = {
     "solar": 5000 / K,   # Total cap: 5000 MW distributed across K clusters
     "wind":  3000 / K,   # Total cap: 3000 MW distributed across K clusters
 }
+
 
 # =============================================================================
 # HELPERS
@@ -194,8 +204,10 @@ EXPANSION_LIMITS_MW = {
 
 def verify_inputs():
     files = {
-        f"cluster_k{K}.nc"  : INPUT_NETWORK,
-        "costs_2035_US.csv" : ATB_FILE,
+        f"cluster_k{K}.nc"     : INPUT_NETWORK,
+        "costs_2035_US.csv"    : ATB_FILE,
+        "fuel_properties.yaml" : FUEL_PROPERTIES_FILE,
+        "carrier_defaults.yaml": CARRIER_DEFAULTS_FILE,
     }
     ok = True
     for name, path in files.items():
@@ -226,6 +238,46 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
     c = 2 * math.asin(math.sqrt(a))
     return R * c
+
+
+def load_fuel_data():
+    """Loads fuel properties and per-carrier defaults from YAML.
+
+    Returns:
+        fuel_props: dict {fuel_code -> {heating_value, physical_unit,
+                                        report_unit, physical_to_report_factor,
+                                        co2_emission_factor, name}}
+        default_fuel_by_carrier: dict {carrier -> fuel_code}
+        fallback_eff_by_carrier: dict {carrier -> efficiency}
+    """
+    with open(FUEL_PROPERTIES_FILE) as f:
+        props_yaml = yaml.safe_load(f)
+
+    with open(CARRIER_DEFAULTS_FILE) as f:
+        defaults_yaml = yaml.safe_load(f)
+
+    fuel_props              = props_yaml["fuels"]
+    default_fuel_by_carrier = defaults_yaml["default_fuel_by_carrier"]
+    fallback_eff_by_carrier = defaults_yaml["fallback_efficiency_by_carrier"]
+
+    return fuel_props, default_fuel_by_carrier, fallback_eff_by_carrier
+
+
+def fuel_price_usd_per_mwh_th(fuel_code):
+    """Returns the 2035 fuel price in USD per MWh of thermal energy. Maps
+    the carrier-side fuel codes (GN/GO/FO) to the prices we already have
+    declared as constants at module level."""
+    if fuel_code == "GN":
+        return GAS_PRICE_USD_MWH_TH
+    if fuel_code == "GO":
+        return DIESEL_PRICE_USD_MWH_TH
+    if fuel_code == "FO":
+        return FUEL_OIL_PRICE_USD_MWH_TH
+    if fuel_code == "CM":
+        # Coal not in Tavo's price file. If the model ever has a coal-fired
+        # plant, this will need to be set explicitly.
+        return None
+    return None
 
 
 # =============================================================================
@@ -358,7 +410,7 @@ def _aggregate_tsam(n):
         for col in demand_per_bus.columns:
             raw_inputs[f"demand__{col}"] = demand_per_bus[col]
 
-   # Generator availability profiles: one column per (carrier, cluster) pair.
+    # Generator availability profiles: one column per (carrier, cluster) pair.
     # Instead of feeding TSAM all individual generators (would be hundreds, very
     # slow), we aggregate them into a per-carrier per-cluster weighted average
     # profile:
@@ -372,14 +424,13 @@ def _aggregate_tsam(n):
     # recovers the profile of its carrier-cluster pair.
     #
     # We only include carrier-cluster pairs whose aggregate profile actually
-    # varies along the year (relative range > eps). Carriers with constant
-    # availability (typical of thermal generators where p_max_pu = 1 always)
-    # are skipped — TSAM doesn't need them to find typical periods, and the
-    # generators recover p_max_pu = 1 downstream.
+    # varies along the year (relative range > eps_relative). Carriers with
+    # constant availability (typical of thermal generators where p_max_pu = 1
+    # always) are skipped — TSAM doesn't need them to find typical periods,
+    # and the generators recover p_max_pu = 1 downstream.
     carrier_cluster_profiles = {}   # (carrier, bus) -> Series
     if not n.generators_t.p_max_pu.empty:
         eps_relative = 0.05
-        # Group p_max_pu columns by (carrier, bus)
         for (carrier, bus), gens_in_group in n.generators.groupby(["carrier", "bus"]):
             cols_with_profile = [g for g in gens_in_group.index
                                  if g in n.generators_t.p_max_pu.columns]
@@ -389,7 +440,6 @@ def _aggregate_tsam(n):
             total_p_nom = float(p_nom.sum())
             if total_p_nom <= 0:
                 continue
-            # Weighted average profile across all generators in this group
             weighted_profile = (
                 n.generators_t.p_max_pu[cols_with_profile]
                 .multiply(p_nom, axis=1).sum(axis=1) / total_p_nom
@@ -418,6 +468,28 @@ def _aggregate_tsam(n):
         print(f"  [WARN] Snapshots ({n_before}) not divisible by hours-per-period "
               f"({TSAM_HOURS_PER_PERIOD}); truncating to {n_periods_real * TSAM_HOURS_PER_PERIOD}.")
         raw_inputs = raw_inputs.iloc[:n_periods_real * TSAM_HOURS_PER_PERIOD]
+
+    # Silence the rescaling warnings from tsam ("Max iteration number reached..."
+    # and "At least one maximal value of the aggregated time series exceeds...").
+    # Both indicate sub-percent deviations after rescaling and are inherent to
+    # distributionAndMinMaxRepresentation; they don't affect model accuracy.
+    # We also silence pandas PerformanceWarning that pop up while we build
+    # raw_inputs incrementally (we know the DataFrame is fragmented; it gets
+    # rebuilt cleanly later).
+    warnings.filterwarnings(
+        "ignore",
+        message="Max iteration number reached.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message="At least one maximal value of the aggregated.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        category=pd.errors.PerformanceWarning,
+    )
 
     aggregation = TimeSeriesAggregation(
         timeSeries        = raw_inputs,
@@ -743,7 +815,7 @@ def add_expandable_generators(n, costs):
                 carrier           = carrier,
                 p_nom             = 0,
                 p_nom_extendable  = True,
-                p_nom_max         = EXPANSION_LIMITS_MW.get(carrier, float("inf")), 
+                p_nom_max         = EXPANSION_LIMITS_MW.get(carrier, float("inf")),
                 capital_cost      = capital_cost,
                 marginal_cost     = marginal_cost,
             )
@@ -751,6 +823,17 @@ def add_expandable_generators(n, costs):
                 kwargs["efficiency"] = eff
 
             n.add("Generator", gen_name, **kwargs)
+
+            # Tag fuel code on the new generator so script 22 can compute
+            # fuel consumption and emissions consistently for new and existing.
+            fuel_code = None
+            if carrier == "ccgt" or carrier == "ocgt":
+                fuel_code = "GN"
+            elif carrier == "diesel":
+                fuel_code = "GO"
+            if fuel_code is not None:
+                n.generators.at[gen_name, "efficiency_fuel"] = fuel_code
+
             n_added += 1
 
         # Attach profile after creating all generators of this carrier
@@ -760,11 +843,115 @@ def add_expandable_generators(n, costs):
             for col in df.columns:
                 n.generators_t.p_max_pu[col] = df[col]
 
+        per_cluster_cap = EXPANSION_LIMITS_MW.get(carrier)
+        cap_str = (f"  cap={per_cluster_cap:,.0f} MW/cluster"
+                   if per_cluster_cap is not None else "  cap=unlimited")
         print(f"  {carrier:<8} : {len(n.buses):>3} new generators  "
               f"capital_cost={capital_cost:>10,.0f} USD/MW/yr  "
-              f"marginal_cost={marginal_cost:>7.2f} USD/MWh")
+              f"marginal_cost={marginal_cost:>7.2f} USD/MWh"
+              f"{cap_str}")
 
     print(f"  Total new expandable generators : {n_added}")
+
+
+# =============================================================================
+# STEP 4b — Recompute marginal costs for existing thermal generators
+# =============================================================================
+
+def update_existing_thermal_costs(n, costs, default_fuel_by_carrier,
+                                  fallback_eff_by_carrier):
+    """Recomputes marginal_cost for all existing thermal generators using
+    target-year fuel prices, real CAMMESA efficiency when available, and
+    ATB fallback otherwise. Also fills in missing efficiency_fuel using the
+    carrier defaults (ccgt/ocgt -> GN, diesel -> GO, steam -> FO).
+
+    Why: the cluster_kN.nc inherits marginal_cost from CVP_Termica which is
+    a 2024 figure. For a 2035 scenario we want costs that reflect 2035 fuel
+    prices, while preserving each plant's actual heat rate. The script 22's
+    fuel/emission accounting also relies on every thermal generator having
+    a proper (efficiency, efficiency_fuel) pair.
+
+    Renewables and nuclear are skipped: they don't have variable fuel cost.
+    """
+    print("\n[4b/7] Recomputing marginal_cost for existing thermal generators ...")
+
+    thermal_carriers = {"ccgt", "ocgt", "diesel", "steam"}
+    is_existing = ~n.generators.index.str.startswith("new_") \
+                  & ~n.generators.index.str.startswith("loadshed_")
+    is_thermal  = n.generators["carrier"].isin(thermal_carriers)
+    targets     = n.generators[is_existing & is_thermal].index
+
+    if len(targets) == 0:
+        print("  No existing thermal generators to update.")
+        return
+
+    # Ensure custom columns exist before assignment (some PyPSA versions
+    # raise on at[] when the column is missing).
+    for col in ("efficiency_fuel", "heat_rate_kcal_per_kwh"):
+        if col not in n.generators.columns:
+            n.generators[col] = None
+
+    # VOM by carrier from ATB (the same we use for new builds, for consistency)
+    vom_by_carrier = {}
+    for carrier, atb_tech in EXPANDABLE_CARRIERS.items():
+        if carrier not in thermal_carriers:
+            continue
+        vom_by_carrier[carrier] = float(costs.get(atb_tech, {}).get("VOM", 0.0))
+
+    n_updated_eff_real     = 0
+    n_updated_eff_fallback = 0
+    n_assigned_fuel        = 0
+    n_skipped              = 0
+
+    for gen in targets:
+        carrier = n.generators.at[gen, "carrier"]
+
+        # ---- Resolve efficiency ----
+        eff_value = n.generators.at[gen, "efficiency"]
+        if pd.isna(eff_value) or float(eff_value) <= 0 or float(eff_value) >= 1.0 - 1e-9:
+            # No real efficiency available (NaN, 0, or PyPSA default 1.0).
+            # Apply ATB fallback for the carrier.
+            fallback = fallback_eff_by_carrier.get(carrier)
+            if fallback is None:
+                n_skipped += 1
+                continue
+            eff_value = float(fallback)
+            n.generators.at[gen, "efficiency"] = eff_value
+            n_updated_eff_fallback += 1
+        else:
+            eff_value = float(eff_value)
+            n_updated_eff_real += 1
+
+        # ---- Resolve fuel ----
+        fuel_code = n.generators.at[gen, "efficiency_fuel"]
+        if pd.isna(fuel_code) or str(fuel_code).strip() == "":
+            fuel_code = default_fuel_by_carrier.get(carrier)
+            if fuel_code is None:
+                n_skipped += 1
+                continue
+            n.generators.at[gen, "efficiency_fuel"] = fuel_code
+            n_assigned_fuel += 1
+        else:
+            fuel_code = str(fuel_code).strip()
+
+        # ---- Resolve fuel price ----
+        price = fuel_price_usd_per_mwh_th(fuel_code)
+        if price is None:
+            print(f"  [WARN] {gen}: no price for fuel {fuel_code}, skipping.")
+            n_skipped += 1
+            continue
+
+        # ---- Recompute marginal cost ----
+        vom = vom_by_carrier.get(carrier, 0.0)
+        new_marginal = vom + (price / eff_value)
+        n.generators.at[gen, "marginal_cost"] = new_marginal
+
+    print(f"  Existing thermal targeted : {len(targets)}")
+    print(f"    With CAMMESA efficiency : {n_updated_eff_real}")
+    print(f"    With ATB fallback       : {n_updated_eff_fallback}")
+    print(f"    Default fuel assigned   : {n_assigned_fuel}")
+    if n_skipped:
+        print(f"    Skipped (no fuel/eff)   : {n_skipped}")
 
 
 # =============================================================================
@@ -885,7 +1072,10 @@ def main():
     scale_demand(n)
     resample_snapshots(n)
     costs = load_atb_costs()
+    fuel_props, default_fuel_by_carrier, fallback_eff_by_carrier = load_fuel_data()
     add_expandable_generators(n, costs)
+    update_existing_thermal_costs(n, costs, default_fuel_by_carrier,
+                                  fallback_eff_by_carrier)
     make_lines_expandable(n)
     add_load_shedding(n)
     save_scenario(n)

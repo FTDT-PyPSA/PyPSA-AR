@@ -13,7 +13,7 @@ Inputs:
     data/network_500kv/generators_2024.csv                (script 14b)
     data/network_500kv/loads_2024.csv                     (script 15)
     data/network_500kv/marginal_costs_2024.csv            (script 18b)
-    external_data_dir/gen_profiles_2024.csv               (external)
+    external_data_dir/gen_profiles_2024.csv               (external — download from GitHub Releases, place in external_data_dir/)
 
 Output:
     networks/network_500kv_simplified.nc
@@ -173,7 +173,14 @@ def add_generators(n):
     print("\n[2/11] Adding generators ...")
 
     gen  = pd.read_csv(GEN_FILE)
-    cost = pd.read_csv(COSTS_FILE)[["gen_key", "marginal_cost"]].copy()
+    # Load marginal_cost plus the new efficiency-related columns introduced
+    # in script 18b. These columns will only be present for thermal units
+    # matched in the CAMMESA efficiency table; the rest will be NaN/empty.
+    cost_cols = ["gen_key", "marginal_cost",
+                 "efficiency", "heat_rate_kcal_per_kwh", "efficiency_fuel"]
+    cost = pd.read_csv(COSTS_FILE)
+    available_cols = [c for c in cost_cols if c in cost.columns]
+    cost = cost[available_cols].copy()
     gen  = gen.merge(cost, on="gen_key", how="left")
 
     no_cost   = gen["marginal_cost"].isna()
@@ -187,26 +194,52 @@ def add_generators(n):
         if n_no_cost:
             print(f"  {n_no_cost} generators without cost -> marginal_cost = 0")
 
+    has_efficiency_col = "efficiency" in gen.columns
+    has_heatrate_col   = "heat_rate_kcal_per_kwh" in gen.columns
+    has_fuel_col       = "efficiency_fuel" in gen.columns
+
     buses_in_network = set(n.buses.index)
     n_added       = 0
     n_missing_bus = 0
+    n_with_eff    = 0
 
     for _, row in gen.iterrows():
         bus = row.get("bus_conexion500kv_name")
         if pd.isna(bus) or bus not in buses_in_network:
             n_missing_bus += 1
             continue
-        n.add(
-            "Generator",
-            row["gen_key"],
+
+        kwargs = dict(
             bus           = bus,
             p_nom         = float(row["p_nom"]),
             carrier       = row["carrier"],
             marginal_cost = float(row["marginal_cost"]),
         )
+
+        # Attach efficiency only when present (CAMMESA-matched thermal units).
+        # PyPSA defaults efficiency to 1.0 for generators that don't set it,
+        # which is fine for renewables and for units we'll patch later in 21
+        # via the ATB fallback.
+        if has_efficiency_col and pd.notna(row.get("efficiency")):
+            kwargs["efficiency"] = float(row["efficiency"])
+            n_with_eff += 1
+
+        n.add("Generator", row["gen_key"], **kwargs)
+
+        # Custom attributes: heat rate (kcal/kWh) and fuel code (GN/FO/GO/CM).
+        # PyPSA stores arbitrary columns in n.generators when set this way.
+        if has_heatrate_col and pd.notna(row.get("heat_rate_kcal_per_kwh")):
+            n.generators.at[row["gen_key"], "heat_rate_kcal_per_kwh"] = \
+                float(row["heat_rate_kcal_per_kwh"])
+        if has_fuel_col and pd.notna(row.get("efficiency_fuel")) \
+                and str(row["efficiency_fuel"]).strip() != "":
+            n.generators.at[row["gen_key"], "efficiency_fuel"] = \
+                str(row["efficiency_fuel"]).strip()
+
         n_added += 1
 
-    print(f"  Generators added     : {n_added}")
+    print(f"  Generators added           : {n_added}")
+    print(f"  Generators with efficiency : {n_with_eff}")
     if n_missing_bus:
         print(f"  [WARN] {n_missing_bus} generators skipped (bus not in network)")
 

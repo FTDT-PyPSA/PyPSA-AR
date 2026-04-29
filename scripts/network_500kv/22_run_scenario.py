@@ -14,7 +14,7 @@ Outputs are saved to networks/scenarios/results_<scenario>_k<K>/, including:
     - summary_by_cluster.csv          Generation, demand and balance per cluster.
     - summary_by_line.csv             Annual flow and usage per inter-cluster line.
     - new_capacity.csv                Capacity built by the optimizer
-                                       (carrier × cluster) and per-line MW added.
+                                       (carrier x cluster) and per-line MW added.
 
 Inputs:
     networks/scenarios/scenario_<scenario>_k<K>.nc   (script 21)
@@ -57,10 +57,16 @@ import pypsa
 # =============================================================================
 
 _cfg = yaml.safe_load(open(Path(__file__).parents[2] / "config.yaml"))
-REPO_DIR = Path(_cfg["repo_dir"])
+REPO_DIR     = Path(_cfg["repo_dir"])
+EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
 SCENARIOS_DIR = REPO_DIR / "networks/scenarios"
 CLUSTERS_DIR  = REPO_DIR / "data/network_500kv/clusters"
+
+# Fuel properties (heating values, CO2 emission factors, reporting units).
+# Loaded from YAML so values are auditable and easy to update without code
+# changes. Same file used by script 21.
+FUEL_PROPERTIES_FILE = EXTERNAL_DIR / "fuels/fuel_properties.yaml"
 
 # Default values when not overridden via CLI
 DEFAULT_SCENARIO = "2035_BAU"
@@ -165,6 +171,106 @@ def load_cluster_names(k):
 def name_of(cluster_id, names):
     """Returns the human name of a cluster, falling back to the id."""
     return names.get(cluster_id, cluster_id)
+
+
+def load_fuel_properties():
+    """Loads fuel_properties.yaml. Returns the dict {fuel_code -> attributes}.
+    Returns empty dict (with a warning) if the file is missing — the script
+    will then skip fuel/emission accounting in summaries."""
+    if not FUEL_PROPERTIES_FILE.is_file():
+        print(f"  [WARN] Fuel properties file not found at {FUEL_PROPERTIES_FILE}.")
+        print(f"         Fuel consumption and emissions will not be reported.")
+        return {}
+    with open(FUEL_PROPERTIES_FILE) as f:
+        data = yaml.safe_load(f)
+    return data.get("fuels", {})
+
+
+def compute_fuel_and_emissions(n, fuel_props):
+    """For each generator with a non-empty `efficiency_fuel` attribute, computes
+    annual fuel consumption (in CAMMESA reporting units) and CO2 emissions (t).
+
+    Formula:
+        generation_MWh   = Σ p × snapshot_weightings           [MWh_e]
+        kcal_per_MWh_e   = 860 / efficiency × 1000             [kcal/MWh_e]
+                          (because 1 kWh_e = 860 kcal_th / efficiency)
+        fuel_physical    = generation_MWh × kcal_per_MWh_e / heating_value
+                          [in physical units of the fuel: m3, kg, l]
+        fuel_report      = fuel_physical × physical_to_report_factor
+                          [in report units: dam3, t, m3]
+        co2_emissions    = fuel_report × co2_emission_factor   [tCO2]
+
+    Returns:
+        DataFrame indexed by generator with columns:
+            efficiency_fuel, generation_MWh, fuel_consumption,
+            fuel_unit, co2_emissions_t
+        Generators without an `efficiency_fuel` are not included.
+    """
+    if not fuel_props or n.generators_t.p.empty:
+        return pd.DataFrame()
+
+    weights = n.snapshot_weightings.objective
+    gens    = n.generators
+
+    # Identify generators with a fuel code (efficiency_fuel column may not
+    # exist if the network was built with an older script 21).
+    if "efficiency_fuel" not in gens.columns:
+        return pd.DataFrame()
+
+    rows = []
+    for gen in gens.index:
+        fuel_code = gens.at[gen, "efficiency_fuel"]
+        if pd.isna(fuel_code) or str(fuel_code).strip() == "":
+            continue
+        fuel_code = str(fuel_code).strip()
+
+        # Skip if we have no properties for this fuel (e.g., coal not in YAML)
+        if fuel_code not in fuel_props:
+            continue
+        props = fuel_props[fuel_code]
+
+        eff = float(gens.at[gen, "efficiency"])
+        if eff <= 0:
+            continue
+
+        # Annual generation of this generator
+        gen_mwh = float(n.generators_t.p[gen].multiply(weights).sum())
+        if gen_mwh <= 0:
+            rows.append({
+                "generator"        : gen,
+                "carrier"          : gens.at[gen, "carrier"],
+                "bus"              : gens.at[gen, "bus"],
+                "efficiency_fuel"  : fuel_code,
+                "generation_MWh"   : 0.0,
+                "fuel_consumption" : 0.0,
+                "fuel_unit"        : props["report_unit"],
+                "co2_emissions_t"  : 0.0,
+            })
+            continue
+
+        # 1 kWh_e of generation requires (1/eff) kWh_th of fuel.
+        # 1 kWh_th = 860 kcal. So 1 MWh_e requires (1000/eff) kWh_th
+        # = (1000 × 860 / eff) kcal_th.
+        kcal_per_mwh_e = 1000.0 * 860.0 / eff
+        # Physical fuel units consumed per MWh of generation
+        # heating_value is in kcal per physical_unit (m3, kg or l)
+        physical_per_mwh = kcal_per_mwh_e / float(props["heating_value"])
+        fuel_physical    = gen_mwh * physical_per_mwh
+        fuel_report      = fuel_physical * float(props["physical_to_report_factor"])
+        co2_emissions    = fuel_report * float(props["co2_emission_factor"])
+
+        rows.append({
+            "generator"        : gen,
+            "carrier"          : gens.at[gen, "carrier"],
+            "bus"              : gens.at[gen, "bus"],
+            "efficiency_fuel"  : fuel_code,
+            "generation_MWh"   : gen_mwh,
+            "fuel_consumption" : fuel_report,
+            "fuel_unit"        : props["report_unit"],
+            "co2_emissions_t"  : co2_emissions,
+        })
+
+    return pd.DataFrame(rows)
 
 
 # =============================================================================
@@ -494,6 +600,47 @@ def compute_new_capacity(n, names):
     return pd.DataFrame(rows)
 
 
+def compute_summary_by_fuel(fuel_emission_df):
+    """Aggregates fuel consumption and emissions per fuel code.
+
+    Input:
+        fuel_emission_df: per-generator dataframe from compute_fuel_and_emissions.
+
+    Returns: DataFrame with one row per fuel code:
+        fuel_code, fuel_unit, generation_GWh,
+        fuel_consumption, co2_emissions_t,
+        share_of_total_emissions_%
+    """
+    if fuel_emission_df is None or fuel_emission_df.empty:
+        return pd.DataFrame()
+
+    grouped = fuel_emission_df.groupby("efficiency_fuel").agg(
+        fuel_unit        = ("fuel_unit", "first"),
+        generation_MWh   = ("generation_MWh", "sum"),
+        fuel_consumption = ("fuel_consumption", "sum"),
+        co2_emissions_t  = ("co2_emissions_t", "sum"),
+    ).reset_index().rename(columns={"efficiency_fuel": "fuel_code"})
+
+    grouped["generation_GWh"] = (grouped["generation_MWh"] * MWH_TO_GWH).round(1)
+
+    total_emissions = grouped["co2_emissions_t"].sum()
+    if total_emissions > 0:
+        grouped["share_of_total_emissions_%"] = (
+            100.0 * grouped["co2_emissions_t"] / total_emissions
+        ).round(2)
+    else:
+        grouped["share_of_total_emissions_%"] = 0.0
+
+    grouped["fuel_consumption"] = grouped["fuel_consumption"].round(0)
+    grouped["co2_emissions_t"]  = grouped["co2_emissions_t"].round(0)
+
+    # Order columns
+    cols = ["fuel_code", "fuel_unit", "generation_GWh",
+            "fuel_consumption", "co2_emissions_t",
+            "share_of_total_emissions_%"]
+    return grouped[cols].sort_values("co2_emissions_t", ascending=False)
+
+
 # =============================================================================
 # STEP 4 — Save
 # =============================================================================
@@ -509,6 +656,31 @@ def save_results(n, output_dir, scenario, k, solver, status, elapsed):
     summary_cluster = compute_summary_by_cluster(n, names)
     summary_line    = compute_summary_by_line(n, names)
     new_capacity    = compute_new_capacity(n, names)
+
+    # Fuel consumption and emissions accounting (per generator + per fuel).
+    # The per-generator dataframe is also written so power-plant-level fuel
+    # use can be inspected if needed.
+    fuel_props        = load_fuel_properties()
+    fuel_per_gen      = compute_fuel_and_emissions(n, fuel_props)
+    summary_by_fuel   = compute_summary_by_fuel(fuel_per_gen)
+
+    # Enrich summary_by_carrier with fuel use and emissions by carrier, so
+    # users can see consumption and CO2 alongside generation/capacity for
+    # each technology.
+    if not fuel_per_gen.empty:
+        carrier_fuel = fuel_per_gen.groupby("carrier").agg(
+            fuel_consumption = ("fuel_consumption", "sum"),
+            co2_emissions_t  = ("co2_emissions_t", "sum"),
+            fuel_unit        = ("fuel_unit", "first"),
+        ).reset_index()
+        summary_carrier = summary_carrier.merge(
+            carrier_fuel, on="carrier", how="left"
+        )
+        # Carriers without a fuel match (renewables, hydro, nuclear) get NaN
+        # which we leave as-is so the CSV makes the absence explicit.
+        # Round numeric cols
+        summary_carrier["fuel_consumption"] = summary_carrier["fuel_consumption"].round(0)
+        summary_carrier["co2_emissions_t"]  = summary_carrier["co2_emissions_t"].round(0)
 
     print(f"\n[4/4] Saving outputs to {output_dir} ...")
     os.makedirs(output_dir, exist_ok=True)
@@ -532,10 +704,22 @@ def save_results(n, output_dir, scenario, k, solver, status, elapsed):
     new_capacity.to_csv(output_dir / "new_capacity.csv", index=False)
     print(f"  Saved : new_capacity.csv")
 
-    return summary_global, summary_carrier, summary_cluster, summary_line, new_capacity
+    if not summary_by_fuel.empty:
+        summary_by_fuel.to_csv(output_dir / "summary_by_fuel.csv", index=False)
+        print(f"  Saved : summary_by_fuel.csv")
+        # Per-generator detail for traceability
+        fuel_per_gen_out = fuel_per_gen.copy()
+        fuel_per_gen_out["generation_MWh"]   = fuel_per_gen_out["generation_MWh"].round(0)
+        fuel_per_gen_out["fuel_consumption"] = fuel_per_gen_out["fuel_consumption"].round(2)
+        fuel_per_gen_out["co2_emissions_t"]  = fuel_per_gen_out["co2_emissions_t"].round(2)
+        fuel_per_gen_out.to_csv(output_dir / "fuel_by_generator.csv", index=False)
+        print(f"  Saved : fuel_by_generator.csv")
+
+    return summary_global, summary_carrier, summary_cluster, summary_line, \
+           new_capacity, summary_by_fuel
 
 
-def print_headline(summary_global, summary_carrier, new_capacity):
+def print_headline(summary_global, summary_carrier, new_capacity, summary_by_fuel):
     """Prints the key numbers at the very end so the user sees them clearly."""
     print(f"\n{'='*70}")
     print(f"HEADLINE RESULTS")
@@ -572,6 +756,29 @@ def print_headline(summary_global, summary_carrier, new_capacity):
             total_line_mw = line_built["new_capacity_MW"].sum()
             print(f"\n  Transmission added    : {total_line_mw:>10,.0f} MW (sum across lines)")
 
+    # Fuel consumption and CO2 emissions
+    if summary_by_fuel is not None and not summary_by_fuel.empty:
+        print(f"\n  Fuel consumption (by fuel):")
+        # Stable order for readability: GN, FO, GO, CM if present
+        fuel_order = ["GN", "FO", "GO", "CM"]
+        ordered = pd.concat([
+            summary_by_fuel[summary_by_fuel["fuel_code"] == f]
+            for f in fuel_order if f in summary_by_fuel["fuel_code"].values
+        ])
+        for _, row in ordered.iterrows():
+            print(f"    {row['fuel_code']:<5} : "
+                  f"{row['fuel_consumption']:>14,.0f} {row['fuel_unit']:<5}  "
+                  f"CO2 {row['co2_emissions_t']:>14,.0f} t  "
+                  f"({row['share_of_total_emissions_%']:>5.1f}% of total)")
+
+        total_co2 = summary_by_fuel["co2_emissions_t"].sum()
+        print(f"\n  Total CO2 emissions   : {total_co2:>15,.0f} tCO2  "
+              f"({total_co2/1e6:.3f} MtCO2)")
+        # Specific emissions vs total demand
+        if g["total_demand_TWh"] > 0:
+            kg_per_mwh = total_co2 * 1000.0 / (g["total_demand_TWh"] * 1e6)
+            print(f"  Specific emissions    : {kg_per_mwh:>15.1f} kgCO2 / MWh demand")
+
 
 # =============================================================================
 # MAIN
@@ -592,11 +799,12 @@ def main():
     n = load_scenario(input_file)
     status, condition, elapsed = solve(n, args.solver)
 
-    summary_global, summary_carrier, _, _, new_capacity = save_results(
-        n, output_dir, args.scenario, args.k, args.solver, status, elapsed
-    )
+    summary_global, summary_carrier, _, _, new_capacity, summary_by_fuel = \
+        save_results(
+            n, output_dir, args.scenario, args.k, args.solver, status, elapsed
+        )
 
-    print_headline(summary_global, summary_carrier, new_capacity)
+    print_headline(summary_global, summary_carrier, new_capacity, summary_by_fuel)
 
     print(f"\n{'='*70}")
     print(f"Optimization complete.")
