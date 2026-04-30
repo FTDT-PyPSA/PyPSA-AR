@@ -79,7 +79,7 @@ coordinates to the model's generator units.
 ✅ 77 PSS/E vs CAMMESA conflicts detected and resolved manually
 ✅ Total system p_nom: ~40,084 MW
 ✅ Hourly p_max_pu profiles 2024: `gen_profiles_2024.csv` (external to GitHub, ~5.3M rows, ~577 units)
-✅ Marginal costs: `marginal_costs_2024.csv` (~433 units with assigned cost, ~171 with cost=0 pending completion)
+✅ Marginal costs: `marginal_costs_2024.csv` (cost + per-unit efficiency and heat rate from CAMMESA)
 
 ---
 
@@ -124,28 +124,32 @@ Results (01/02/2024 14:00):
 
 ---
 
-## 5. Marginal costs
+## 5. Marginal costs and efficiencies
 
-### Source: CAMMESA — CVP_Termica.csv + CVP_renovar.csv
+### Source: CAMMESA — CVP_Termica.csv + CVP_renovar.csv + efficencies.xlsx
 
-Variable production costs per plant, extracted from CAMMESA post-operative files.
+Variable production costs per plant, extracted from CAMMESA post-operative files,
+plus a per-machine table of net electrical efficiency and net heat rate
+(`C.E.NETO`) used by the scenario pipeline.
 
 Processed by:
 - `18_diagnose_marginal_costs.py` → `marginal_costs_diagnostic.csv` (coverage audit)
-- `18b_build_marginal_costs_2024.py` → `marginal_costs_2024.csv` (final table)
+- `18b_build_marginal_costs_2024.py` → `marginal_costs_2024.csv` (final table with cost + efficiency)
 
 Assignment logic:
 - Thermal/nuclear: match by reduced key (nemo4 + unit number) against CVP_Termica
 - Renewables: match by normalized plant name against CVP_renovar (annual average Jan-24 to Dec-24)
 - Hydro and pending: `CVP_manual` column filled manually in the diagnostic file
+- Per-unit `efficiency`, `heat_rate_kcal_per_kwh` and `efficiency_fuel`:
+  attached to the same output table by matching against `efficencies.xlsx`,
+  using the GN > FO > GO fuel hierarchy
 
-Source CVP files: external to GitHub.
+Source CVP files and `efficencies.xlsx`: external to GitHub.
 Output file: `marginal_costs_2024.csv` — versioned in Git.
 
 ### Status
 
-✅ ~433 units with assigned marginal cost
-⚠️ ~171 units with cost=0 (hydro units pending completion by the project team)
+✅ Marginal cost and efficiency table built and used downstream by scripts 19, 20A and 21
 
 ---
 
@@ -161,11 +165,55 @@ Output file: `results_2024_YYYYMMDD_YYYYMMDD.nc` in `networks/` — external to 
 
 ### Status
 
-✅ Script built and ready to run
+✅ Built and run on 2024 data
 
 ---
 
-## 7. Renewables (VRE) — for future stages
+## 7. Scenarios
+
+### Pipeline: 20A → 20B → 21 → 22
+
+Future-year scenarios are built on top of a clustered version of the 500 kV
+base network. The pipeline simplifies the network, clusters it spatially,
+constructs the scenario inputs (demand growth, expandable generators,
+target-year fuel prices) and solves the joint capacity-expansion + dispatch LP.
+
+Processed by:
+- `20A_simplify_network.py` → `network_500kv_simplified.nc` (collapses
+  secondary buses to their 500 kV parents and attaches all 2024 inputs)
+- `20B_network_clustering.py` → `cluster_k{N}.nc` + `clusters_k{N}.gpkg`
+  (k-means clustering into K regions, default K = 10, 20, 30)
+- `21_build_scenario.py` → `scenario_<name>_k{N}.nc` (scales demand, applies
+  TSAM time aggregation, adds expandable generators with ATB-2035 costs,
+  recomputes existing thermal marginal cost at target-year fuel prices,
+  enforces per-cluster RES expansion caps)
+- `22_run_scenario.py` → `results_<name>_k{N}/` (LP solver output: post-optimization
+  `.nc` plus summary CSVs by carrier, cluster, line, fuel, plus per-generator
+  fuel and CO2 traceability)
+
+### Inputs (external to GitHub)
+
+- `costs_2035_US.csv` — NREL Annual Technology Baseline Market+Moderate
+  scenario for 2035: capex, FOM, VOM, efficiency, lifetime, WACC per technology.
+  Used by 21 to annualize capital and to set new-build efficiencies and
+  fallback efficiencies for unmatched existing units.
+- `efficencies.xlsx` — already described in section 5; also used downstream
+  by the scenario pipeline through `marginal_costs_2024.csv`.
+- `fuel_properties.yaml` — physical heating values, reporting units and
+  IPCC / Tercer BUR CO2 emission factors per fuel code (GN, FO, GO, CM).
+  Used by 21 (marginal cost computation) and 22 (fuel and emissions reporting).
+- `carrier_defaults.yaml` — per-carrier default fuel codes and ATB-based
+  fallback efficiencies for thermal units missing a CAMMESA match.
+
+### Status
+
+✅ Pipeline built end-to-end. First validated scenario: **2035 BAU at K = 10**
+(demand 188 TWh, RES capped at 5 GW solar + 3 GW wind, total annual cost
+~5.65 billion USD, ~42 MtCO2)
+
+---
+
+## 8. Renewables (VRE) — for future stages
 
 ### Wind and solar
 
@@ -181,16 +229,23 @@ Status: 🔲 not started.
 
 ---
 
-## 8. Fuel prices and emissions — for future stages
+## 9. Fuel prices and emissions
 
 ### Sources
 
 - ENARGAS (natural gas)
 - CAMMESA (reference prices)
 - IRENA / NREL ATB (international references)
-- Emission factors by technology (tCO2/MWh)
+- Argentine Tercer BUR / IPCC: emission factors per fuel and net heating values
 
-Status: 🔲 to be structured in a further phase.
+### Status
+
+✅ Partial. The scenario pipeline (script 21) uses 2035 fuel prices for natural
+gas, fuel oil and gas oil from internal references, and applies CO2 emission
+factors per fuel code from `fuel_properties.yaml` (Tercer BUR / IPCC defaults).
+Coal (`CM`) is declared in the fuel properties file but not yet wired into
+scenario pricing. A more granular price structure (e.g. monthly, regional)
+remains pending.
 
 ---
 

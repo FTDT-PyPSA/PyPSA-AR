@@ -2,9 +2,9 @@
 
 Reproducible model of the Argentine high-voltage power grid using PyPSA.
 
-**Current status:** Scripts 01–19 complete. 500 kV network built, 2024 hourly generation and demand incorporated, marginal costs assigned, DC economic dispatch validated.
+**Current status:** Scripts 01–22 complete. 500 kV network built, 2024 hourly generation and demand incorporated, marginal costs assigned with CAMMESA-derived efficiencies, DC economic dispatch validated, and future-year scenario pipeline (clustering + capacity expansion + dispatch) operational with first 2035 BAU scenario produced.
 **Next phase:** PYPSA-AR — integration of 220 kV and 132 kV nodes over the existing 500 kV network.
-**Deadline:** 30/04/2026
+
 
 ---
 
@@ -120,6 +120,14 @@ python scripts/network_500kv/18b_build_marginal_costs_2024.py
 
 # Economic dispatch — configure START_DATE, END_DATE and CHUNK_DAYS in the script before running
 python scripts/network_500kv/19_run_optimization.py
+
+# Network simplification + clustering — required before scenarios
+python scripts/network_500kv/20A_simplify_network.py
+python scripts/network_500kv/20B_network_clustering.py
+
+# Future-year scenarios — require external ATB cost file and fuel YAMLs (not versioned in git)
+python scripts/network_500kv/21_build_scenario.py
+python scripts/network_500kv/22_run_scenario.py
 ```
 
 ## Team

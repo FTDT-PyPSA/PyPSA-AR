@@ -91,7 +91,7 @@ Objective: incorporate marginal costs, run the 2024 economic dispatch and analyz
 |--------|-------------|--------|
 | `18_diagnose_marginal_costs.py` | Cost coverage audit per unit | ✅ |
 | `18b_build_marginal_costs_2024.py` | Fixed annual marginal cost table | ✅ |
-| `19_run_optimization.py` | DC economic dispatch (OPF) — `n.optimize()` | ✅ built, full-year run pending |
+| `19_run_optimization.py` | DC economic dispatch (OPF) — `n.optimize()` | ✅ |
 
 
 Notes:
@@ -99,18 +99,35 @@ Notes:
 
 ---
 
-## Phase 5 — Incorporate 220, 330, 132 kV levels 🔲 NEXT PHASE
+## Phase 5 — Scenarios on top of the 500 kV network ✅ COMPLETED
+
+Objective: build and optimize future-year scenarios on a clustered version of
+the 500 kV base network. The clustering aggregates the ~80 simplified buses
+into K regions (typical: 10) and the scenario builder scales demand,
+recomputes marginal costs at target-year fuel prices, and adds expandable
+generators and lines.
+
+| Script | Description | Status |
+|--------|-------------|--------|
+| `20A_simplify_network.py` | Collapses secondary buses to their 500 kV parents and exports a self-contained simplified PyPSA network with all 2024 generators, loads, profiles, marginal costs and per-unit efficiencies attached | ✅ |
+| `20B_network_clustering.py` | Spatial k-means clustering of the simplified network into K regions (default: 10, 20, 30) | ✅ |
+| `21_build_scenario.py` | Builds a future-year scenario: scales demand, applies TSAM time aggregation (16 typical days × 24 h), adds expandable generators with ATB-2035 costs, recomputes marginal cost of every existing thermal generator at target-year fuel prices using its real CAMMESA efficiency (or ATB fallback when missing), enforces per-cluster RES expansion caps, makes inter-cluster lines expandable, and adds load shedding | ✅ |
+| `22_run_scenario.py` | Solves the joint capacity-expansion + dispatch LP and produces a results directory with summary CSVs (global, by carrier, by cluster, by line, by fuel, new capacity, fuel by generator) plus the post-optimization `.nc` | ✅ |
+
+First validated scenario — **2035 BAU at K=10**:
+- Demand: 188 TWh (+38% over 2024)
+- Time aggregation: TSAM 16 typical days, 384 snapshots
+- New RES capped at 5,000 MW solar + 3,000 MW wind (total)
+- Total annual cost: ~5.65 billion USD
+- Renewable share: ~35%
+- CO2 emissions: ~42 MtCO2 (~227 kgCO2/MWh)
+
+---
+
+## Phase 6 — Incorporate 220, 330, 132 kV levels 🔲 NEXT PHASE
 
 Same pipeline as 500 kV, level by level.
 Scripts 01–08 are reusable with different voltage filters.
 Incorporate inter-level transformers.
-
----
-
-## Phase 6 — Expansion scenarios 🔲 PENDING
-
-With the validated base model, run energy policy and network expansion scenarios.
-Requires: validated model (Phase 5), future demand scenario definitions,
-new technology cost curves, and decision on clustering levels to use.
 
 Project deadline: 30/04/2026
