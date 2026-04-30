@@ -1,57 +1,82 @@
 """
 21_build_scenario.py
 Builds a future scenario on top of a clustered network produced by script 20B.
-The scenario applies a uniform demand growth, adds expandable generators in
-each cluster for the technologies that can grow (CCGT, OCGT, diesel, solar,
-wind), enables expansion of existing transmission lines, and inserts virtual
-load-shedding generators to guarantee feasibility.
-
+The scenario applies a uniform demand growth, applies time aggregation
+(typical days via TSAM), recomputes the marginal cost of every existing
+thermal generator at target-year fuel prices using its real CAMMESA
+efficiency, adds expandable generators in each cluster for the technologies
+that can grow (CCGT, OCGT, diesel, solar, wind), enables expansion of
+existing transmission lines, and inserts virtual load-shedding generators to
+guarantee feasibility.
+ 
 The result is a PyPSA Network ready to be optimized by script 22 (capacity
 expansion + dispatch in a single optimization).
-
+ 
 Inputs:
-    networks/clusters/cluster_k{K}.nc                                 (script 20B)
-    data/external/technology_data/costs_2035_US.csv                   (ATB)
-
+    data/network_500kv/clusters/cluster_k{K}.nc                      (from 20B)
+    {EXTERNAL_DIR}/Technology_data/costs_2035_US.csv                 (NREL ATB)
+    {EXTERNAL_DIR}/fuels/fuel_properties.yaml                        (heating values, CO2 factors)
+    {EXTERNAL_DIR}/fuels/carrier_defaults.yaml                       (default fuel + fallback efficiency per carrier)
+ 
 Output:
     networks/scenarios/scenario_{SCENARIO_NAME}_k{K}.nc
-
+ 
 What this script does (high level):
-    1. Loads the base clustered network (year 2024 already attached).
+    1. Loads the base clustered network (year 2024 already attached, with
+       per-unit `efficiency`, `heat_rate_kcal_per_kwh` and `efficiency_fuel`
+       columns inherited from script 20A).
     2. Scales every demand series by (1 + growth)^(target_year - base_year).
-    3. Reads ATB cost CSV and normalizes to USD/MW with EUR->USD conversion.
-    4. For each cluster + each expandable carrier:
+    3. Time aggregation. Per-cluster demand and per-(carrier, cluster)
+       weighted-average availability profiles are aggregated via TSAM into
+       N typical days x 24 h. Each generator's `p_max_pu` is reassigned from
+       its (carrier, cluster) typical profile so hourly availability
+       constraints are preserved (in particular the 2024 hydro dispatch
+       ceiling).
+    4. Reads ATB cost CSV and normalizes to USD/MW with EUR->USD conversion.
+    5. For each cluster + each expandable carrier:
          a. Computes annualized capital_cost using the ATB WACC for the carrier.
-         b. Computes marginal_cost from VOM + fuel_price/efficiency.
+         b. Computes marginal_cost from VOM + fuel_price/efficiency for thermal
+            new builds. Tags each new thermal generator with its fuel code
+            (CCGT/OCGT -> GN, diesel -> GO).
          c. For solar/wind, attaches an hourly p_max_pu profile inherited from
-            the closest existing generator of the same carrier (heuristic).
-         d. Adds a Generator with p_nom=0, p_nom_extendable=True.
-    5. Marks all inter-cluster lines as s_nom_extendable=True with
+            the (carrier, cluster) typical profile.
+         d. Adds a Generator with p_nom=0, p_nom_extendable=True, and
+            p_nom_max from EXPANSION_LIMITS_MW (per-cluster cap on variable RES).
+    6. Recomputes `marginal_cost` for every existing thermal generator using
+       target-year fuel prices, the unit's real CAMMESA efficiency (loaded
+       upstream by 18b/20A) and ATB VOM. Units without a CAMMESA match use
+       the per-carrier fallback efficiency and default fuel code from
+       carrier_defaults.yaml. The original CVP-2024 marginal cost is
+       overwritten so existing and new generators compete on the same price
+       basis at the target year.
+    7. Marks all inter-cluster lines as s_nom_extendable=True with
        capital_cost = annualized HVAC overhead per MW per km, multiplied by
        the geodesic length of the line between cluster centroids.
-    6. Adds a virtual load-shedding generator per cluster with very high
+    8. Adds a virtual load-shedding generator per cluster with very high
        marginal cost, so the optimization is always feasible.
-    7. Saves the .nc and prints a summary.
-
+    9. Saves the .nc and prints a summary.
+ 
 What this script does NOT do:
     - It does not optimize. That is script 22.
     - It does not produce results, reports or KPIs.
     - It does not regenerate clusters. The clustering is fixed (script 20B).
-
+ 
 Modeling decisions (set in CONFIGURATION below — edit there to vary scenarios):
     - Demand grows uniformly: every load series is multiplied by the same factor.
     - Capacity expansion is endogenous (the model decides how much to build).
-    - No locational constraints on new generators (model is free to put solar
-      anywhere, wind anywhere, etc.). First scenario only — to be refined.
-    - Existing 2024 generators are kept untouched (p_nom_extendable=False by
-      default in PyPSA when not specified).
+    - Per-cluster expansion caps for variable RES via EXPANSION_LIMITS_MW
+      (default: 5,000 MW solar / 3,000 MW wind total, distributed uniformly
+      across K clusters). To remove a cap, drop the carrier from the dict.
+    - Existing 2024 generators are kept untouched in capacity
+      (p_nom_extendable=False by default in PyPSA when not specified) but
+      have their marginal_cost recomputed at target-year fuel prices.
     - WACC is taken from ATB per technology (CCGT 5.36%, solar 4.68%, etc.).
       Technologies coming from Danish Energy Agency (OCGT, oil) do not bring
       a discount rate — DEFAULT_WACC is used for them.
     - The override variable WACC_OVERRIDE allows running a future iteration
       with a single uniform WACC (e.g. 0.16 for Argentina) without changing
       the script structure.
-
+ 
 Run from the repository root:
     python scripts/network_500kv/21_build_scenario.py
 """

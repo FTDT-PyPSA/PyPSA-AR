@@ -3,39 +3,63 @@
 Optimizes a scenario network produced by script 21. Solves a joint
 capacity-expansion + dispatch LP: the optimizer decides simultaneously
 how much of each expandable generator/line to build and how to dispatch
-all hours of the target year.
-
+all hours of the target year (or all typical days, when TSAM is used in 21).
+ 
 Outputs are saved to networks/scenarios/results_<scenario>_k<K>/, including:
     - results_<scenario>_k<K>.nc      Full PyPSA network post-optimization
                                        (with hourly dispatch, optimal capacities,
                                        flows, marginal prices).
     - summary_global.csv              One-row-per-scenario KPIs.
-    - summary_by_carrier.csv          Annual generation, capacity, costs by carrier.
+    - summary_by_carrier.csv          Annual generation, capacity, costs,
+                                       fuel consumption and CO2 emissions
+                                       by carrier.
     - summary_by_cluster.csv          Generation, demand and balance per cluster.
     - summary_by_line.csv             Annual flow and usage per inter-cluster line.
+    - summary_by_fuel.csv             Total fuel consumption (in CAMMESA
+                                       reporting units: dam3, t, m3) and CO2
+                                       emissions per fuel code.
+    - fuel_by_generator.csv           Per-generator fuel consumption and CO2
+                                       for full traceability.
     - new_capacity.csv                Capacity built by the optimizer
-                                       (carrier x cluster) and per-line MW added.
-
+                                       (carrier × cluster) and per-line MW added.
+ 
 Inputs:
-    networks/scenarios/scenario_<scenario>_k<K>.nc   (script 21)
-
+    networks/scenarios/scenario_<scenario>_k<K>.nc            (from 21)
+    data/network_500kv/clusters/cluster_names_k<K>.csv        (optional, region names)
+    {EXTERNAL_DIR}/fuels/fuel_properties.yaml                 (heating values, CO2 factors)
+ 
+Cluster naming:
+    If cluster_names_k<K>.csv exists with columns 'cluster_id' and 'name',
+    region names (e.g. AMBA, Comahue, Patagonia) replace raw 'cluster_X'
+    labels in all summary CSVs and console output. Falls back to raw ids
+    if the file is missing.
+ 
+Fuel and emissions accounting:
+    For each thermal generator with an `efficiency_fuel` attribute (set
+    upstream by 18b -> 20A -> 21), the script computes annual fuel
+    consumption and CO2 emissions using physical heating values and IPCC /
+    Tercer BUR emission factors loaded from fuel_properties.yaml.
+ 
 Usage:
     # Default: 2035_BAU at K=10 with HiGHS
     python scripts/network_500kv/22_run_scenario.py
-
+ 
     # Custom scenario / cluster level
     python scripts/network_500kv/22_run_scenario.py --scenario 2035_BAU --k 10
-
+ 
     # Custom solver (requires the solver to be installed and licensed)
     python scripts/network_500kv/22_run_scenario.py --solver gurobi
-
+ 
 Notes:
-    - The optimization horizon is the entire year (8784 hours). No chunking
-      is used because expansion decisions are annual and cannot be chunked.
+    - The optimization horizon is the entire year (8784 hours, or the typical
+      days × 24 h produced by TSAM in 21 with the corresponding snapshot
+      weightings that sum to ~8784). No chunking is used because expansion
+      decisions are annual and cannot be chunked.
     - HiGHS is the default solver (open source, included with PyPSA). Gurobi
       and CPLEX can be selected if installed.
     - Solve time on a typical laptop with HiGHS for K=10 is on the order of
-      15-60 minutes. Larger K or more carriers will scale this up.
+      seconds to a few minutes when 21 was run with TSAM (default), and
+      15-60 minutes if 21 used the full 8784-hour horizon.
     - The input scenario .nc is never modified. The optimizer's results are
       written into a fresh copy that is exported separately.
 """
