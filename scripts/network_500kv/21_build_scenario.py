@@ -101,7 +101,7 @@ REPO_DIR     = Path(_cfg["repo_dir"])
 EXTERNAL_DIR = Path(_cfg["external_data_dir"])
 
 # --- Scenario identity ---
-SCENARIO_NAME = "2035_BAU"
+SCENARIO_NAME = "2035_GAS_CAP_60"
 BASE_YEAR     = 2024
 TARGET_YEAR   = 2035
 K             = 10           # which cluster_kN.nc to use
@@ -220,6 +220,22 @@ DEMAND_FACTOR = (1 + DEMAND_GROWTH_RATE) ** N_YEARS
 EXPANSION_LIMITS_MW = {
     "solar": 5000 / K,   # Total cap: 5000 MW distributed across K clusters
     "wind":  3000 / K,   # Total cap: 3000 MW distributed across K clusters
+}
+
+# --- Daily fuel consumption caps (in fuel report units) ---
+# When non-empty, the optimizer will be forbidden from consuming more than
+# the indicated amount of each fuel within any single typical day. Units
+# match the `report_unit` of each fuel in fuel_properties.yaml (GN -> dam3,
+# FO -> t, GO -> m3). Leave the dict empty to disable all fuel caps; this
+# is the default for "unconstrained" scenarios such as 2035_BAU.
+#
+# Example for an Argentine winter gas-supply restriction at 60 MMm3/day:
+#     FUEL_CAPS_DAILY = {"GN": 60_000}   # dam3/day  (60 MMm3 = 60_000 dam3)
+#
+# Caps are written into the scenario .nc as a network attribute so that
+# script 22 can read and apply them without needing the YAML or this script.
+FUEL_CAPS_DAILY = {
+    "GN": 60_000,   # dam3/day
 }
 
 
@@ -1065,6 +1081,21 @@ def add_load_shedding(n):
 def save_scenario(n):
     print(f"\n[7/7] Saving scenario network ...")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Persist daily fuel caps into the network metadata so script 22 can
+    # apply them as constraints during optimization without needing access
+    # to this script or the YAMLs. PyPSA's NetCDF export preserves n.meta
+    # as a JSON-encoded attribute on the dataset.
+    if FUEL_CAPS_DAILY:
+        if n.meta is None:
+            n.meta = {}
+        n.meta["fuel_caps_daily"] = dict(FUEL_CAPS_DAILY)
+        print(f"  Daily fuel caps written into n.meta:")
+        for fuel, cap in FUEL_CAPS_DAILY.items():
+            print(f"    {fuel} : {cap:,.0f} (report units / day)")
+    else:
+        print(f"  No daily fuel caps configured (FUEL_CAPS_DAILY is empty).")
+
     n.export_to_netcdf(OUTPUT_FILE)
     print(f"  Saved : {OUTPUT_FILE}")
 

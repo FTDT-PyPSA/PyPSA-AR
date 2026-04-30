@@ -331,17 +331,178 @@ def load_scenario(input_file):
 # STEP 2 — Solve
 # =============================================================================
 
-def solve(n, solver):
+def build_fuel_caps_extra_functionality(n, fuel_caps_daily, fuel_props):
+    """Returns an `extra_functionality` callable that adds one constraint per
+    (fuel_code, typical day) limiting the physical fuel consumption of all
+    thermal generators with that `efficiency_fuel` to at most the configured
+    daily cap.
+
+    For each thermal generator g with efficiency e_g, fuel f and snapshot s,
+    its fuel consumption (in fuel report units) at that snapshot is:
+
+        consumption_g_s = p_g_s * (1000 * 860 / e_g) / heating_value_f
+                                 * physical_to_report_factor_f * w_s
+
+    where w_s is the snapshot's objective weighting (hours represented).
+    The constraint imposed for each (fuel f, day d) is:
+
+        Σ_{g with fuel=f, s in day d} consumption_g_s ≤ cap_f_per_day
+
+    Days are derived from the snapshot index by grouping consecutive blocks
+    of `hours_per_period` snapshots; this matches PyPSA's TSAM output.
+    Returns None if no caps apply (so the caller can pass None directly to
+    n.optimize without wrapping).
+    """
+    if not fuel_caps_daily:
+        return None
+
+    # Identify the thermal generators per fuel code, with efficiency > 0
+    if "efficiency_fuel" not in n.generators.columns:
+        print(f"  [WARN] Network has no `efficiency_fuel` column — fuel caps cannot be applied.")
+        return None
+
+    gens_by_fuel = {}
+    for fuel_code in fuel_caps_daily:
+        if fuel_code not in fuel_props:
+            print(f"  [WARN] Fuel '{fuel_code}' has a daily cap but no entry in "
+                  f"fuel_properties.yaml. Skipping its cap.")
+            continue
+        mask = (n.generators["efficiency_fuel"] == fuel_code) & (n.generators["efficiency"] > 0)
+        gens = n.generators.index[mask].tolist()
+        if not gens:
+            print(f"  [WARN] Fuel '{fuel_code}' has a daily cap but no generators "
+                  f"declare it as their efficiency_fuel. Skipping.")
+            continue
+        gens_by_fuel[fuel_code] = gens
+
+    if not gens_by_fuel:
+        return None
+
+    # Precompute per-generator fuel coefficient (report units per MWh of generation,
+    # before snapshot weighting). This is independent of snapshot.
+    gen_coef = {}
+    for fuel_code, gens in gens_by_fuel.items():
+        props = fuel_props[fuel_code]
+        hv      = float(props["heating_value"])
+        p2r     = float(props["physical_to_report_factor"])
+        for g in gens:
+            eff = float(n.generators.at[g, "efficiency"])
+            # Fuel report units per MWh_e generated (no weighting yet)
+            gen_coef[g] = (1000.0 * 860.0 / eff) / hv * p2r
+
+    # Group snapshots into typical days. Linopy / PyPSA TSAM keeps the snapshot
+    # multiindex with (period, hour). We just chunk by 24 to be safe.
+    snapshots = list(n.snapshots)
+    hours_per_day = 24
+    days = [snapshots[i : i + hours_per_day]
+            for i in range(0, len(snapshots), hours_per_day)]
+
+    weights = n.snapshot_weightings.objective
+
+    # Per-day scaling: each "typical day" produced by TSAM represents N real
+    # days (e.g. typical day 0 may stand for 60 real days). Hourly weights
+    # within that typical day sum to 24 * N. To turn a daily cap (configured
+    # as "max consumption on any single real day") into the cap applied to
+    # the typical day, we multiply by N = (sum of hourly weights) / 24.
+    #
+    # This means each typical day's constraint is interpreted as: the
+    # average daily consumption across the N real days it represents must
+    # not exceed the configured daily cap.
+    import numpy as np
+    import xarray as xr
+
+    days_scale = np.array([
+        sum(float(weights.loc[s]) for s in day_snaps) / hours_per_day
+        for day_snaps in days
+    ])
+
+    # Pretty diagnostics
+    n_constraints = sum(len(days) for _ in gens_by_fuel)
+    print(f"  Fuel-cap constraints to be added : {n_constraints} "
+          f"({len(gens_by_fuel)} fuel(s) x {len(days)} day(s))")
+    print(f"  Days represented per typical day : "
+          f"min={days_scale.min():.1f}  max={days_scale.max():.1f}  "
+          f"sum={days_scale.sum():.1f}")
+
+    def extra_functionality(network, snaps):
+        # `network.model` is the linopy Model.
+        # `model.variables['Generator-p']` has dims (snapshot, Generator).
+        # We build constraints in vectorized form: for each fuel, build a
+        # per-snapshot fuel-consumption expression for the relevant
+        # generators, then sum it over each day's 24 snapshots.
+        model = network.model
+        p_var = model.variables["Generator-p"]
+
+        # Snapshot weights aligned to the variable's snapshot dimension
+        snap_dim = p_var.dims[0]
+        w_da = xr.DataArray(
+            weights.values, coords={snap_dim: weights.index}, dims=[snap_dim]
+        )
+
+        for fuel_code, gens in gens_by_fuel.items():
+            cap_per_real_day = float(fuel_caps_daily[fuel_code])
+
+            # Per-generator fuel coefficient as a DataArray over Generator dim
+            coefs = xr.DataArray(
+                np.array([gen_coef[g] for g in gens], dtype=float),
+                coords={"Generator": gens},
+                dims=["Generator"],
+            )
+
+            # Slice variable to only this fuel's generators
+            p_sel = p_var.sel(Generator=gens)
+
+            # Hourly fuel consumption expression (snapshot x Generator):
+            # consumption_s_g = p_s_g * coef_g * w_s
+            consumption = p_sel * coefs * w_da
+
+            # Sum across generators -> total fuel consumption per snapshot
+            consumption_per_snap = consumption.sum(dim="Generator")
+
+            for d_idx, day_snaps in enumerate(days):
+                effective_cap = cap_per_real_day * float(days_scale[d_idx])
+                lhs = consumption_per_snap.sel({snap_dim: day_snaps}).sum()
+                model.add_constraints(
+                    lhs <= effective_cap,
+                    name=f"fuel_cap_{fuel_code}_day{d_idx:02d}",
+                )
+
+    return extra_functionality
+
+
+def solve(n, solver, fuel_props):
     print(f"\n[2/4] Solving capacity expansion + dispatch ...")
     print(f"  Solver         : {solver}")
     print(f"  Snapshots      : {len(n.snapshots)}")
     print(f"  Generators     : {len(n.generators)}")
     print(f"  This is a single LP over the entire year — no chunking.")
     print(f"  Solve may take from 15 minutes to over an hour depending on scale.")
+
+    # Read fuel caps from the scenario .nc (written by script 21 into n.meta).
+    fuel_caps_daily = {}
+    if isinstance(n.meta, dict):
+        fuel_caps_daily = n.meta.get("fuel_caps_daily", {}) or {}
+
+    if fuel_caps_daily:
+        print(f"  Daily fuel caps loaded from n.meta:")
+        for f, cap in fuel_caps_daily.items():
+            unit = fuel_props.get(f, {}).get("report_unit", "?")
+            print(f"    {f} : {cap:,.0f} {unit}/day")
+    else:
+        print(f"  No daily fuel caps configured for this scenario.")
+
+    extra_fn = build_fuel_caps_extra_functionality(n, fuel_caps_daily, fuel_props)
+
     print(f"  Starting at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     t0 = time.perf_counter()
-    status, condition = n.optimize(solver_name=solver)
+    if extra_fn is not None:
+        status, condition = n.optimize(
+            solver_name=solver,
+            extra_functionality=extra_fn,
+        )
+    else:
+        status, condition = n.optimize(solver_name=solver)
     elapsed = time.perf_counter() - t0
 
     print(f"\n  Status         : {status}")
@@ -821,7 +982,13 @@ def main():
     input_file, output_dir = get_paths(args.scenario, args.k)
 
     n = load_scenario(input_file)
-    status, condition, elapsed = solve(n, args.solver)
+
+    # Fuel properties are needed both by `solve` (to build daily fuel-cap
+    # constraints if any) and downstream by `save_results` (for fuel and CO2
+    # accounting). Load once and reuse.
+    fuel_props = load_fuel_properties()
+
+    status, condition, elapsed = solve(n, args.solver, fuel_props)
 
     summary_global, summary_carrier, _, _, new_capacity, summary_by_fuel = \
         save_results(
